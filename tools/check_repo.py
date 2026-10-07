@@ -317,8 +317,6 @@ def check_supersede_links(ctx, out, rel, num, fm):
             continue
         if num not in [ref_num(y)[1] for y in aslist(tfm.get("replaces")) if ref_num(y)]:
             out(V("E", "AGENTS:plan条目", rel, f"互链不一致：{x}.replaces 未回指 D{num}"))
-        if tfm.get("status") != "superseded":
-            out(V("E", "AGENTS:plan条目", rel, f"互链目标 {x} 状态非 superseded"))
     for x in rp:
         r = ref_num(x)
         if not r or not ctx.exists(*r):

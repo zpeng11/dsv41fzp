@@ -1,14 +1,14 @@
 ---
 id: P0001
 title: 仓库纪律机械执法器 check_repo.py
-status: active
+status: completed
 created: 2026-10-07
 updated: 2026-10-08
-knowledge: pending
+knowledge: covered
 docs: []
 bench: []
-decisions: [D0001, D0003]
-followups: []
+decisions: [D0001, D0002, D0003]
+followups: [P0003]
 ---
 
 ## 意图
@@ -56,3 +56,9 @@ followups: []
 - bench manifest 与字节冻结 hash 校验**未启用**：格式待宪法「bench」工作流定案后随 P 条目开启；冻结区目前仅 W。
 - 「src 变更必经 merge 落 main」需要第一父链审计视角，留 v1.5 的 `--audit` 扩展。
 - `--range A..B` / exit code 契约面向未来非机柜 CI job（治理检查与机柜解耦）。
+
+## 收尾
+
+- 验收或停止依据：用户于 2026-10-08 明确确认修复合法决策替代误报并完成 P0001。v1 已随实现提交 `81225e3` 与合并提交 `835cc5a` 入库；P0002 / D0003 已补齐结项契约。本次 P0003 补充 accepted 替代者、连续替代链及既有拒绝行为的回归测试，修复前两个合法用例均复现误报，修复后全部 57 项测试通过。本地 macOS arm64，运行 `python3 tests/tools/test_check_repo.py`、`python3 tools/check_repo.py --audit --strict` 和 `git diff --check`，结果分别为通过、E=0 W=0、通过。用户随后确认修复完成并授权结项、提交、合入与推送；本次修复与本条目、STATUS 的结项同步记录于 P0003 修复提交。不涉及目标机柜性能或数值精度验证。
+- 知识处置：covered；D0001 定义治理基线，D0002 记录执法范围与演进纪律，D0003 定义结项契约；v1 规则映射与已知局限保留在本条目，后续结项校验扩展见 P0002，不新增重复的 docs 正文。
+- 剩余义务：本次修复与结项变更由 P0003 完成入库跟踪，followups 保留历史指针，无未完成的 v1 验收义务。CI 接线、bench manifest / 冻结区 hash、第一父链审计是已声明的后续范围，不是 P0001 v1 验收义务，结项不表示这些功能已实现。
