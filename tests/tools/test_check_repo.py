@@ -1,4 +1,4 @@
-"""check_repo.py 的规则级测试（P0001 / P0002）：临时 git 仓库验证受治/违规两侧。
+"""check_repo.py 的规则级测试（P0001 / P0002 / P0003）：临时仓库验证受治/违规两侧。
 
 运行：python3 tests/tools/test_check_repo.py
 """
@@ -317,6 +317,77 @@ class CheckRepoTests(unittest.TestCase):
         rc, out = self.fx.check()
         self.assertEqual(rc, 1)
         self.assertIn("悬空", out)
+
+
+class SupersedeTests(unittest.TestCase):
+    def setUp(self):
+        self.fx = Fixture()
+        self.addCleanup(shutil.rmtree, self.fx.dir)
+        baseline(self.fx)
+
+    def write_pair(self, old_status="superseded", new_status="accepted",
+                   successor="D0002", replaces="D0001"):
+        old = D1.replace("status: accepted", f"status: {old_status}")
+        old = old.replace("superseded-by: []", f"superseded-by: [{successor}]" if successor else "superseded-by: []")
+        new = D2.replace("status: accepted", f"status: {new_status}")
+        new = new.replace("replaces: []", f"replaces: [{replaces}]" if replaces else "replaces: []")
+        self.fx.write("plan/decisions/d0001-governance-baseline.md", old)
+        self.fx.write("plan/decisions/d0002-next.md", new)
+
+    def check_error(self, message):
+        rc, out = self.fx.check("--audit", "--strict")
+        self.assertEqual(rc, 1, out)
+        self.assertIn(message, out)
+
+    def test_accepted_successor_passes_audit(self):
+        self.write_pair()
+        self.fx.commit("D0002 plan: supersede baseline", {
+            "plan/STATUS.md": "# STATUS D0001 superseded, D0002 accepted\n",
+        })
+        rc, out = self.fx.check("--audit", "--strict")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("SUMMARY E=0 W=0", out)
+
+    def test_supersede_chain_passes_audit(self):
+        self.write_pair()
+        self.fx.commit("D0002 plan: supersede baseline", {
+            "plan/STATUS.md": "# STATUS D0002 accepted\n",
+        })
+        new = D2.replace("status: accepted", "status: superseded")
+        new = new.replace("replaces: []", "replaces: [D0001]")
+        new = new.replace("superseded-by: []", "superseded-by: [D0003]")
+        third = D1.replace("D0001", "D0003").replace("replaces: []", "replaces: [D0002]")
+        self.fx.commit("D0003 plan: supersede next decision", {
+            "plan/decisions/d0002-next.md": new,
+            "plan/decisions/d0003-latest.md": third,
+            "plan/STATUS.md": "# STATUS D0002 superseded, D0003 accepted\n",
+        })
+        rc, out = self.fx.check("--audit", "--strict")
+        self.assertEqual(rc, 0, out)
+
+    def test_missing_successor_rejected(self):
+        self.write_pair(successor="")
+        self.check_error("superseded 须回填 superseded-by")
+
+    def test_dangling_successor_rejected(self):
+        self.write_pair(successor="D9999", replaces="")
+        self.check_error("superseded-by 悬空")
+
+    def test_successor_missing_backlink_rejected(self):
+        self.write_pair(replaces="")
+        self.check_error("replaces 未回指 D0001")
+
+    def test_predecessor_missing_backlink_rejected(self):
+        self.write_pair(old_status="accepted", successor="")
+        self.check_error("superseded-by 未回指 D0002")
+
+    def test_predecessor_wrong_status_rejected(self):
+        self.write_pair(old_status="accepted")
+        self.check_error("replaces 目标 D0001 状态非 superseded")
+
+    def test_dangling_predecessor_rejected(self):
+        self.write_pair(old_status="accepted", successor="", replaces="D9999")
+        self.check_error("replaces 悬空")
 
 
 class ClosureTests(unittest.TestCase):
