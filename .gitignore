@@ -1,0 +1,18 @@
+# 生成物，非源码
+build/
+pack/
+logs/
+*.log
+*.nsys-rep
+*.sqlite
+*.npz
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# 部署器在目标机上创建
+/.venv/
+
+# 基准产物（bench/results/ 的入库内容由人审后 add -f 或调整规则）
+bench/micro/
+bench/*.gguf

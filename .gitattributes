@@ -1,0 +1,9 @@
+# 冻结提示词按字节哈希（manifest sha256）：绝不转换行尾
+bench/prompts/** -text
+
+# 金标准 fixture 按字节读取：不转换行尾
+tests/data/** -text
+
+# 启动脚本保持各平台行尾
+*.sh text eol=lf
+*.bat text eol=crlf
