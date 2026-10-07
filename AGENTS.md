@@ -9,7 +9,7 @@ dsv41fzp 是 DeepSeek-V4.1-Flash 的单机柜推理引擎：单一模型特化�
 | 位置 | 角色 |
 | --- | --- |
 | `docs/` | 事实的唯一归宿；每个数字带来源标记（[卡][cfg][代码]…）与测量环境 |
-| `plan/` | 意图、决策记录与状态页（`STATUS.md`）；条目完成后结论沉淀进 `docs/` |
+| `plan/` | 意图、决策记录与状态页（`STATUS.md`）；条目结项前明确知识去向，只保留过程、验收证据与归档指针 |
 | `ref/` | Python FP32 oracle，验证链之根，先于引擎存在 |
 | `include/df/` | 公共头，镜像 `src/` 模块 |
 | `src/` | 引擎，按域分模块（划分见 README；`src/quant` 是全仓库量化格式的唯一真源） |
@@ -26,13 +26,14 @@ dsv41fzp 是 DeepSeek-V4.1-Flash 的单机柜推理引擎：单一模型特化�
 1. **每个工件可追溯**——commit、测试、bench 记录引用 plan 编号（`P<NNNN>` 工作项 / `D<NNNN>` 决策，扁平递增、四位零填充、永不复用；生命周期与模板见工作流「plan 条目」）。
 2. **维护简洁comment**——代码comment一般情况仅允许覆盖函数/类等代码块作为代码块的整体解释， 不允许将细节编码改动体现在comment中。
 3. **文档防膨胀**——`docs/` 与 `plan/` 的**内容性写入**（新建或修改正文、结论、决策）须用户确认，对话中的明确指示即为确认
-4. **生命周期簿记**——免二次确认：`plan/`的按模板新建条目 stub、状态翻转与互链回填、`plan/STATUS.md` 的状态更新。临时归纳与跨会话草稿进 `scratch/`。
+4. **生命周期簿记**——免二次确认：`plan/`的按模板新建条目 stub、状态翻转与互链回填、`plan/STATUS.md` 的状态更新；仅免除记录动作的确认，不授权 agent 修改验收条件、接受新决策或批准事实正文。事先授权按明确条件自主验收时可据证据记录结项，约定人工验收时不得绕过。临时归纳与跨会话草稿进 `scratch/`。
 5. **宪法自缚**——本文件的修订须用户确认；agent 不得改写自身受约束的执法依据。
 
 
 ## 工作流
 
-- **plan 条目**：工作项 `plan/p<NNNN>-<slug>.md`，决策 `plan/decisions/d<NNNN>-<slug>.md`，模板在对应目录。编号扁平递增、四位零填充、永不复用，ID 进文件名。P 状态机 `draft → active → sedimented | abandoned`（sedimented = 结论已沉淀进 docs 的终态）；D 状态机 `proposed → accepted | rejected | superseded`。归档 = 原地改 front matter 状态，文件永不移动删除——commit 里的编号引用永远可解析。决策被取代时新建 D 文件，两者 `replaces` / `superseded-by` 互链，不改写旧文。状态翻转与 `plan/STATUS.md` 同步在同一提交内完成，禁止事后补记。
+- **plan 条目**：工作项 `plan/p<NNNN>-<slug>.md`，决策 `plan/decisions/d<NNNN>-<slug>.md`，模板在对应目录。编号扁平递增、四位零填充、永不复用，ID 进文件名。P 状态机 `draft → active → completed | abandoned`，允许 draft 直接 abandoned；终态不得重新激活，后续工作新建 P 并引用原项。completed = 约定交付物已到位、验收成立、知识及剩余义务已明确处置，不以合并或新增 docs 内容单独判定。D 状态机 `proposed → accepted | rejected | superseded`。归档 = 原地改 front matter 状态，文件永不移动删除——commit 里的编号引用永远可解析。决策被取代时新建 D 文件，两者 `replaces` / `superseded-by` 互链，不改写旧文。状态翻转与 `plan/STATUS.md` 同步在同一提交内完成，禁止事后补记。
+- **工作项收尾**：P 必填 `knowledge`（pending / updated / covered / none / deferred）与 `followups`（接收剩余义务的 P 编号）。pending = 尚未处理，不得进入终态；updated = 已新增或修订长期知识；covered = 既有权威材料完整覆盖；none = 无长期知识增量，须具体说明理由；deferred = 非阻塞整理已明确移交，须有接收工作的 P 引用并说明不阻塞交付的理由。updated / covered 至少引用一项 docs / bench / decisions 中的归档或依据；引用须可解析，followups 不得自指。completed / abandoned 均须按模板填写收尾记录（验收或停止依据、知识处置、剩余义务）。必要知识缺失阻塞交付，不得 deferred；原项的 deferred 保留移交历史，剩余义务是否完成看接收项。长期事实、契约与操作知识进 docs，决策理由留 D，实验原始证据留 bench，不重复归档。知识处置是否充分属于评审域。历史 sedimented 允许一次迁移为 completed，不重写旧提交。
 - **git**：trunk-based。`main` 始终可构建，未完成路径靠运行时开关默认关（见补充约束）。实现类改动走短命分支 `p<NNNN>-<slug>`，`--no-ff` 合入，合并提交 subject 以 `Merge P<NNNN>` 开头。提交 subject 格式 `<P|D 编号> <area>: <论断句>`，area 与 `src/` 域名或仓库级域名（docs / plan / bench / ci / tools / serve / deploy）对齐。义务表落 trailer：性能论断必带 `Bench: bench/results/<日期-主题>`，kernel 与量化变更必带 `Oracle: <parity 测试路径>`。`meta:` 前缀仅限不改行为与论断的仓库维护提交（构建配置、格式化、ignore 等）；docs/ 与 plan/ 的改动经用户确认后可直接提交 main。
 - **构建**：`待填`。
 - **bench**：`待填`。

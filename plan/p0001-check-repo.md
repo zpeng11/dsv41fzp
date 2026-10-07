@@ -3,10 +3,12 @@ id: P0001
 title: 仓库纪律机械执法器 check_repo.py
 status: active
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-08
+knowledge: pending
 docs: []
 bench: []
-decisions: [D0001]
+decisions: [D0001, D0003]
+followups: []
 ---
 
 ## 意图
