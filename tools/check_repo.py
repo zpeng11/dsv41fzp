@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""check_repo.py — 仓库纪律机械执法器（P0001 v1）。
+"""check_repo.py — 仓库纪律机械执法器（P0001 v1；P0002/D0003 扩展 P 生命周期与知识处置）。
 
 校验 AGENTS.md（宪法）工作流与禁区条文中可机械化、零语义判定的子集：
 subject/area 格式、编号引用可解析、Bench:/Oracle: trailer 义务与真伪、
 VERSION 递增纪律、禁区触碰、plan 条目 front matter 与 supersede 互链、
+P 条目知识处置（knowledge/followups 枚举、引用真实、路径存在）、P 状态机迁移边、
 条目状态翻转与 STATUS.md 同提交同步、条目文件永不删除。
 
-规则↔条文映射、设计决议与演进规范见 plan/p0001-check-repo.md。
+规则↔条文映射、设计决议与演进规范见 plan/p0001-check-repo.md；
+P 生命周期与知识处置扩展见 P0002 与 D0003。
 治理起点（epoch）= 首个 plan/decisions/d<NNNN>-*.md 的入库 commit，之前的
 提交一律豁免；epoch 未建立时仅执行树级检查并提示。纯标准库 + git。
 """
@@ -27,9 +29,28 @@ PROVENANCE = "third_party/reference/PROVENANCE.md"
 STATUS_PAGE = "plan/STATUS.md"
 CONSTITUTION = "AGENTS.md"
 VERSION_FILE = "VERSION"
-P_STATUSES = ("draft", "active", "sedimented", "abandoned")
+P_STATUSES = ("draft", "active", "completed", "abandoned")
 D_STATUSES = ("proposed", "accepted", "rejected", "superseded")
-P_FM_KEYS = ("id", "title", "status", "created", "updated", "docs", "bench", "decisions")
+P_TERMINAL = ("completed", "abandoned")
+P_TRANSITIONS = {
+    "draft": {"active", "abandoned"},
+    "active": {"completed", "abandoned"},
+    "completed": set(),
+    "abandoned": set(),
+    "sedimented": {"completed"},
+}
+P_TRANSITIONS_LEGACY = {
+    "draft": {"active", "abandoned"},
+    "active": {"sedimented", "abandoned"},
+    "sedimented": set(),
+    "abandoned": set(),
+    "completed": set(),
+}
+P_NEW_KEYS = ("knowledge", "followups")
+KNOWLEDGE = ("pending", "updated", "covered", "none", "deferred")
+CLOSING_FIELDS = ("- 验收或停止依据：", "- 知识处置：", "- 剩余义务：")
+P_FM_KEYS = ("id", "title", "status", "created", "updated", "docs", "bench", "decisions",
+             "knowledge", "followups")
 D_FM_KEYS = ("id", "title", "status", "created", "updated", "replaces", "superseded-by")
 
 ENTRY_RE = re.compile(r"^(p|d)(\d{4})-([a-z0-9][a-z0-9-]*)\.md$")
@@ -103,6 +124,30 @@ def ref_num(x):
     return (m.group(1).upper(), m.group(2)) if m else None
 
 
+def ref_for(x, kind):
+    """按字段类型取编号：无字母前缀时采用字段类型，带了则须与字段类型一致。"""
+    r = ref_num(x)
+    if r is None:
+        return None
+    letter, num = r
+    return num if not letter or letter == kind else None
+
+
+def rel_under(repo, path, prefix):
+    """相对引用须落在 prefix 下：拒绝绝对/.. 逃逸，且 realpath 不越出该实目录。"""
+    p = str(path).strip()
+    if not p or p.startswith("/") or os.path.isabs(p):
+        return None
+    norm = os.path.normpath(p)
+    if norm.startswith("..") or not norm.startswith(prefix):
+        return None
+    base = os.path.realpath(os.path.join(repo, prefix.rstrip("/")))
+    real = os.path.realpath(os.path.join(repo, norm))
+    if real != base and not real.startswith(base + os.sep):
+        return None
+    return norm
+
+
 def aslist(v):
     return v if isinstance(v, list) else ([] if v in (None, "") else [v])
 
@@ -132,9 +177,10 @@ def scan_entry_file(ctx, out, rel, kind, num):
     path = os.path.join(ctx.repo, rel)
     try:
         with open(path, encoding="utf-8") as f:
-            fm = parse_frontmatter(f.read())
+            text = f.read()
     except OSError:
-        fm = None
+        text = None
+    fm = parse_frontmatter(text) if text is not None else None
     ctx.entries[key] = (rel, fm)
     if fm is None:
         out(V("E", "AGENTS:plan条目", rel, "front matter 缺失或破损"))
@@ -156,8 +202,30 @@ def scan_entry_file(ctx, out, rel, kind, num):
     elif isinstance(fm.get("created"), str) and isinstance(fm.get("updated"), str):
         if DATE_RE.match(fm["created"]) and DATE_RE.match(fm["updated"]) and fm["updated"] < fm["created"]:
             out(V("E", "AGENTS:plan条目", rel, "updated 早于 created"))
-    if kind == "p" and fm.get("status") == "sedimented" and not aslist(fm.get("docs")):
-        out(V("E", "AGENTS:plan条目", rel, "sedimented 前必须回填 docs:（沉淀目标）"))
+    if kind == "p" and fm.get("status") in P_TERMINAL:
+        check_closing(out, rel, text or "")
+
+
+def check_closing(out, rel, text):
+    """终态条目的收尾记录须落在 `## 收尾` 章节内且非空（仅结构与非空，不判语义）。"""
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if re.match(r"^##\s*收尾\s*$", ln):
+            start = i + 1
+            break
+    if start is None:
+        out(V("E", "AGENTS:plan条目", rel, "终态条目须含 `## 收尾` 章节"))
+        return
+    body = []
+    for ln in lines[start:]:
+        if re.match(r"^#{1,2}(?!#)\s", ln):
+            break
+        body.append(ln)
+    for marker in CLOSING_FIELDS:
+        if not any(ln.strip().startswith(marker) and ln.strip()[len(marker):].strip()
+                   for ln in body):
+            out(V("E", "AGENTS:plan条目", rel, f"收尾记录缺失或为空：{marker}"))
 
 
 def scan_tree(ctx, out):
@@ -182,10 +250,49 @@ def scan_tree(ctx, out):
         if kind == "D":
             check_supersede_links(ctx, out, rel, num, fm)
         else:
-            for x in aslist(fm.get("decisions")):
-                r = ref_num(x)
-                if r is None or not ctx.exists(r[0], r[1]):
-                    out(V("E", "AGENTS:plan条目", rel, f"decisions 引用悬空或格式非法：{x}"))
+            check_p_disposition(ctx, out, rel, num, fm)
+
+
+def check_p_disposition(ctx, out, rel, num, fm):
+    """P 条目的知识处置：引用真实、路径存在、枚举合法与状态互锁。"""
+    status = fm.get("status")
+    knowledge = fm.get("knowledge")
+    docs = aslist(fm.get("docs"))
+    bench = aslist(fm.get("bench"))
+    decisions = aslist(fm.get("decisions"))
+    followups = aslist(fm.get("followups"))
+    if knowledge is not None and knowledge not in KNOWLEDGE:
+        out(V("E", "AGENTS:plan条目", rel,
+              f"knowledge 非法：{knowledge!r}（合法：{'/'.join(KNOWLEDGE)}）"))
+    for d in docs:
+        rp = rel_under(ctx.repo, str(d).split("#", 1)[0], "docs/")
+        if rp is None:
+            out(V("E", "AGENTS:plan条目", rel, f"docs 须为 docs/ 下相对路径（禁绝对/逃逸）：{d}"))
+        elif not os.path.isfile(os.path.join(ctx.repo, rp)):
+            out(V("E", "AGENTS:plan条目", rel, f"docs 指向的文件不存在：{d}"))
+    for b in bench:
+        rp = rel_under(ctx.repo, str(b), "bench/results/")
+        if rp is None:
+            out(V("E", "AGENTS:plan条目", rel, f"bench 须为 bench/results/ 下相对路径：{b}"))
+        elif not os.path.isdir(os.path.join(ctx.repo, rp)):
+            out(V("E", "AGENTS:plan条目", rel, f"bench 指向的目录不存在：{b}"))
+    for x in decisions:
+        r = ref_for(x, "D")
+        if r is None or not ctx.exists("D", r):
+            out(V("E", "AGENTS:plan条目", rel, f"decisions 引用悬空或格式非法：{x}"))
+    for x in followups:
+        r = ref_for(x, "P")
+        if r is None or not ctx.exists("P", r):
+            out(V("E", "AGENTS:plan条目", rel, f"followups 引用悬空或格式非法：{x}"))
+        elif r == num:
+            out(V("E", "AGENTS:plan条目", rel, f"followups 不得自指：{x}"))
+    if status in P_TERMINAL and knowledge == "pending":
+        out(V("E", "AGENTS:plan条目", rel, f"{status} 条目 knowledge 不得为 pending"))
+    if knowledge in ("updated", "covered") and not (docs or bench or decisions):
+        out(V("E", "AGENTS:plan条目", rel,
+              f"knowledge={knowledge} 须至少有 docs/bench/decisions 之一引用"))
+    if knowledge == "deferred" and not followups:
+        out(V("E", "AGENTS:plan条目", rel, "knowledge=deferred 须回填非空 followups"))
 
 
 def check_supersede_links(ctx, out, rel, num, fm):
@@ -361,14 +468,59 @@ def check_commit(repo, sha, ctx, out):
 
     flipped = False
     for f in files:
-        if not f.startswith("plan/") or not ENTRY_RE.match(os.path.basename(f)):
+        base = os.path.basename(f)
+        m = ENTRY_RE.match(base)
+        if not f.startswith("plan/") or not m:
             continue
         old_fm = fm_from_blob(repo, f"{sha}^1:{f}") if parents else None
         new_fm = fm_from_blob(repo, f"{sha}:{f}")
-        if old_fm and new_fm and old_fm.get("status") != new_fm.get("status"):
+        if not old_fm or not new_fm:
+            continue
+        if m.group(1) == "p":
+            check_p_field_removal(out, tag, f, old_fm, new_fm)
+        if old_fm.get("status") != new_fm.get("status"):
             flipped = True
+            if m.group(1) == "p":
+                check_p_transition(out, tag, f, old_fm, new_fm, is_merge)
     if flipped and STATUS_PAGE not in files:
         out(V("E", "AGENTS:plan条目", tag, "条目状态翻转未与 plan/STATUS.md 同一提交同步"))
+
+
+def check_p_field_removal(out, tag, rel, old_fm, new_fm):
+    """P 的新 schema 字段一经引入不得在后续提交中删除（即使 status 未变）。"""
+    for k in P_NEW_KEYS:
+        if k in old_fm and k not in new_fm:
+            out(V("E", "AGENTS:plan条目", tag, f"P 条目不得删除字段：{rel} 缺 {k}"))
+
+
+def check_p_transition(out, tag, rel, old_fm, new_fm, is_merge):
+    """P 状态机合法迁移；普通提交须单步直接边，merge 净差异为累积状态变化（非单次事件）
+    故按对应 schema 图的可达性判定，终态无出边天然不可达。旧 schema（old/new front matter
+    均无 knowledge/followups）沿用旧边集，sedimented→completed 仅按新 schema 允许。"""
+    old = old_fm.get("status")
+    new = new_fm.get("status")
+    legacy = not any(k in old_fm for k in P_NEW_KEYS) and not any(k in new_fm for k in P_NEW_KEYS)
+    edges = P_TRANSITIONS_LEGACY if legacy else P_TRANSITIONS
+    if old not in edges:
+        out(V("E", "AGENTS:plan条目", tag, f"P 起始状态非法：{rel} {old!r}"))
+        return
+    ok = p_reachable(edges, old, new) if is_merge else new in edges[old]
+    if not ok:
+        out(V("E", "AGENTS:plan条目", tag, f"P 非法状态迁移：{rel} {old} → {new}"))
+
+
+def p_reachable(edges, old, new):
+    """状态图自 old 是否可达 new（含单步；终态无出边故不可再激活）。"""
+    seen = {old}
+    stack = [old]
+    while stack:
+        for t in edges.get(stack.pop(), set()):
+            if t == new:
+                return True
+            if t not in seen:
+                seen.add(t)
+                stack.append(t)
+    return False
 
 
 def audit_deletions(repo, epoch, out):
