@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-骨架期，向密集开发期过渡。目录结构与治理基线已落：引擎版本方案、plan 编号、git 规范（`plan/decisions/d0001-governance-baseline.md`）。引擎实现（`src/`）、oracle（`ref/`）、构建、CI 均未动工；宪法「构建」「bench」两处待填。
+骨架期，向密集开发期过渡。目录结构与治理基线已落：引擎版本方案、plan 编号、git 规范（`D0001`），机械执法器入宪（`D0002`）。机械执法器 `tools/check_repo.py` v1 随 `P0001`（active）交付：16 项规则测试通过，本仓库实跑 E=0；CI 接线待「构建」工作流定案。引擎实现（`src/`）、oracle（`ref/`）、构建、CI 均未动工；宪法「构建」「bench」两处待填。
 
 ## 文档进度
 
