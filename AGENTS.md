@@ -37,6 +37,7 @@ dsv41fzp 是 DeepSeek-V4.1-Flash 的单机柜推理引擎：单一模型特化�
 - **构建**：`待填`。
 - **bench**：`待填`。
 - **引擎版本**：单一真源为根目录 `VERSION` 文件（`0.<minor>.<patch>`，`0.x` 期无兼容承诺；仅由合并流程递增，不手工改）。初始 0.1.0；每次 `--no-ff` 合入后 patch+1，minor 递增绑定 plan 条目声明的里程碑，major 固定 0 直到 1.0 决策。CMake 读入注入编译定义，Python 工具与 CI 直接读文件；构建时工作树脏则版本串加 `+dirty` 后缀；引擎启动日志打印版本，使 bench 落盘日志自描述。量化/pack 格式版本独立为 `src/quant` 常量，不随引擎版本走。bench manifest 必含 `version`（须与 VERSION 一致）、`git_sha`、`dirty`。文档数字引用语法固定：`引擎 <x.y.z>; bench/results/<日期-主题>`。tag 仅打在有 bench 记录背书的里程碑（`v<x.y.z>`），不逐提交打。
+- **机械执法**：工作流与禁区的可机械化子集由 `tools/check_repo.py` 校验（`python3 tools/check_repo.py [--range A..B] [--audit] [--strict]`，提交格式与 area、编号引用可解析、trailer 义务与真伪、VERSION 纪律、禁区触碰、plan 条目一致性；规则映射与豁免见 `plan/p0001-check-repo.md`），CI 与每次合入前必跑；首个 D 条目入库 commit 之前的提交豁免。
 ## 禁区
 
 - `third_party/reference/` 只读：只做仲裁，不参与构建。
