@@ -1,7 +1,7 @@
 ---
 id: P0002
 title: 工作项交付结项与知识处置解耦
-status: active
+status: completed
 created: 2026-10-08
 updated: 2026-10-08
 knowledge: covered
@@ -45,10 +45,10 @@ followups: []
 - docs 可带章节引用，但仅检查文件存在，不校验章节标题。
 - 引用继续按当前树解析，不扩展为逐提交时点校验；旧字段结构判定仅用于兼容历史迁移边。
 - 移交是否阻塞交付、接收项是否真实承担义务、none / covered 的理由是否充分仍属评审。
-- 本次修改尚未提交与合入，P0002 保持 active；入库须将 D0003 宪法修订单独直接提交 main，再合入 P 实现，不把 AGENTS.md 带入实现 merge。
+- 用户审阅确认后按既有 git 纪律入库：D0003 宪法修订直接提交 main（`390c404`），P0002 实现分支提交（`c6bf346`）以 --no-ff 合入；merge 本体递增 VERSION 至 0.1.2 并同步本条目与 STATUS 的结项，不携带 AGENTS.md 变更。
 
 ## 收尾
 
-- 验收或停止依据：2026-10-08，本地 macOS arm64，运行 `python3 tests/tools/test_check_repo.py`，49 项测试通过；`python3 tools/check_repo.py --audit --strict` 为 E=0 W=0；`git diff --check` 通过。临时克隆验证 D 修宪直接提交 main、P 实现 --no-ff 合入与版本递增、结项与 STATUS 同提交，两次严格历史审计均为 E=0 W=0。未验证目标机柜，也未提交实际仓库；本项不涉及引擎性能与数值精度。
+- 验收或停止依据：2026-10-08，用户明确确认已 review 并授权提交合入。本地 macOS arm64，运行 `python3 tests/tools/test_check_repo.py`，49 项测试通过；`python3 tools/check_repo.py --audit --strict` 为 E=0 W=0；实现分支 `--range main..HEAD --strict` 为 E=0 W=0；`git diff --check` 通过。临时克隆已验证修宪、实现合入及结项流程，实际提交按上述拆分执行。未验证目标机柜；本项不涉及引擎性能与数值精度。
 - 知识处置：covered；用户批准的结项契约已由 D0003 与 AGENTS.md 表达，本项只保留规则映射与实现证据，不新增重复的 docs 正文。
-- 剩余义务：内容与本地验证已完成，实际仓库的 D 提交与 P 合入尚未执行，故保持 active；没有转移至后续 P 的知识义务。
+- 剩余义务：无。本次约定的修订、验证与入库已完成，没有转移至后续 P 的知识义务；CI、bench manifest 及其他既存缺陷不属于本项范围。
