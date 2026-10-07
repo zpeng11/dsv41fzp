@@ -1,6 +1,6 @@
 # HARDWARE.md — 目标硬件、支持矩阵与部署资质
 
-本页定义目标硬件形态、支持矩阵与**部署资质门槛（Q-xx）**（由 `tools/qualify_hw.py` 实现，`deploy/` 在启动前执行，不过即拒启）。
+本页定义目标硬件形态、支持矩阵与**部署资质门槛**（将由 `tools/qualify_hw.py` [待实现]实现，`deploy/` 启动前执行，不过即拒启）。
 
 **来源标记**：**[厂]** 厂商公开规格 · **[算]** 由公开规格推导（附式）· **[待测]** 以实测为准 ·
 
@@ -46,7 +46,7 @@
 
 ## 5. PCIe / 系统设置
 
-- GPU→pinned 池 DMA 可达；跨 NUMA 访问损耗实测记录（Q6）[待测]。
+- GPU→pinned 池 DMA 可达；跨 NUMA 访问损耗实测记录[待测]。
 - IOMMU/ACS 对 P2P 的影响必须记录（ACS 强制经根复合体时会显著拖慢 NVLink P2P 路径）[待测]。
 - `RLIMIT_MEMLOCK` ≥ pinned 池大小；THP 建议 `madvise` 。
 

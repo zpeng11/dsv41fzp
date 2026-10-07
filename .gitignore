@@ -10,9 +10,8 @@ __pycache__/
 .pytest_cache/
 *.pyc
 
+# 临时归纳与跨会话草稿
+scratch/
+
 # 部署器在目标机上创建
 /.venv/
-
-# 基准产物（bench/results/ 的入库内容由人审后 add -f 或调整规则）
-bench/micro/
-bench/*.gguf

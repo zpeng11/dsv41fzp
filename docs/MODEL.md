@@ -20,7 +20,7 @@
 | MoE | 每层 1 共享专家 + 384 路由专家（激活 6）；moe_intermediate 2304；专家张量共 47,232 个（backbone 46,080 + DSpark 1,152） | [cfg][代码] |
 | 残差流 | **mHC 超连接：4 份并行残差拷贝（hc_mult 4）+ Sinkhorn 平衡的 4×4 混合矩阵（hc_sinkhorn_iters 20）——推理期每 token 每子层都执行，非训练专用**（详见 §2.8） | [代码][报告] |
 | 投机解码 | DSpark：3 个 nextn 层（40–42），各带 128 专家 MoE（激活 3）、SWA 128；Markov 头 rank 256；block size 5；noise token 128799 = `<｜System｜>` 特殊 token（详见 §2.7） | [cfg][代码] |
-| 多模态 | 32 层 ViT（hidden 1024，patch 14，≤1024 image tokens），权重 BF16 在 shard 1；**已决策纳入实现（2026-10-06），kernel 见 K-V1** | [cfg][代码] |
+| 多模态 | 32 层 ViT（hidden 1024，patch 14，≤1024 image tokens），权重 BF16 在 shard 1；kernel 见 K-V1** | [cfg][代码] |
 
 ## 2. 结构与格式
 
@@ -169,7 +169,7 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
 
 | 编号 | 内容 |
 | --- | --- |
-| K-H1 | mHC 混合：hc_mixes 投影 → pre/post 门 + 4×4 Sinkhorn(20 迭代) 双随机化，每 token 每子层；生产形态 Mega-mHC 融合单核。与所有子层耦合，**放 P2 早期定接口** |
+| K-H1 | mHC 混合：hc_mixes 投影 → pre/post 门 + 4×4 Sinkhorn(20 迭代) 双随机化，每 token 每子层；生产形态 Mega-mHC 融合单核。与所有子层耦合 |
 
 ### 3.5 路由（`src/core/`）
 
