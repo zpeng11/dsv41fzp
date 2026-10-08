@@ -1,6 +1,6 @@
 # AGENTS.md
 
-dsv41fzp 是 DeepSeek-V4.1-Flash 的单机柜推理引擎：单一模型特化，只把这一个模型在一种硬件形态（双路 CPU + 2/4 卡 NVLink GPU 的单机柜）上跑好。模型事实见 [docs/MODEL.md](docs/MODEL.md)，满足资质的目标硬件见 [docs/HARDWARE.md](docs/HARDWARE.md)。
+dsv41fzp 是 DeepSeek-V4.1-Flash 的单机柜推理引擎：单一模型特化，只把这一个模型在一种硬件形态（双路 CPU + 2/4 卡具备 GPU P2P 的单机柜，NVLink 非必选）上跑好。模型事实见 [docs/MODEL.md](docs/MODEL.md)，满足资质的目标硬件见 [docs/HARDWARE.md](docs/HARDWARE.md)。
 
 **本文件是执法文件**：只收规则与路由。知识在 `docs/`（单一信息源，本文件不复述），状态在 `plan/`（本文件不记载当前进度）。文中 `待填` 为骨架占位，由维护者替换；替换前对应条目不生效。
 
