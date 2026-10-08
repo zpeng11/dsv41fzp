@@ -1,10 +1,10 @@
 ---
 id: P0004
 title: 研究 RTX PRO 6000 并将硬件支持条件改为可验证的 GPU P2P
-status: active
+status: completed
 created: 2026-10-08
 updated: 2026-10-08
-knowledge: pending
+knowledge: updated
 docs: [docs/HARDWARE.md, docs/MODEL.md]
 bench: []
 decisions: [D0004]
@@ -23,7 +23,7 @@ followups: [P0005]
 - [x] 全局取消 NVLink 必选，保留已有 NVLink 机型；PCIe PRO 6000 的型号范围、拓扑、逐对访问与正确性验证要求明确。
 - [x] AGENTS、README 与 MODEL 的传输前提一致；STATUS 表达开发阶段初期，不再复制过时治理实施流水账。
 - [x] 治理检查、既有测试与 diff 空白检查通过；未验证部分及后续义务有明确记录。
-- [ ] 用户评审确认研究结论与文档修订；本项在确认前保持 active，不以工具通过自动结项。
+- [x] 用户评审确认研究结论与文档修订；用户于 2026-10-08 确认审计完成并授权提交合入，本项据此结项，不以工具通过自动结项。
 
 ## 记录
 
@@ -33,6 +33,6 @@ followups: [P0005]
 
 ## 收尾
 
-- 验收或停止依据：进行中；研究、文档修订与本地校验已完成，用户于 2026-10-08 确认审计完成并授权提交合入。支持契约与结项记录将在 P0004 分支同步入库，目标机实测不由本地文档检查代替。
-- 知识处置：pending；本地资料与支持契约修订待随 P0004 入库，完成后同步记录 updated；长期知识归 docs/HARDWARE.md 与 docs/MODEL.md，决策理由归 D0004。
-- 剩余义务：P0005 已建立并接收硬件资质检查器、部署预检与首台目标机实测义务；这些实现与认证不属于本项文档交付范围。
+- 验收或停止依据：用户于 2026-10-08 确认审计完成并授权提交合入，研究依据、支持契约及 AGENTS/README/MODEL 的传输前提修订已完成。本地 macOS arm64，执行 `python3 tools/check_repo.py --audit --strict`、`PYTHONDONTWRITEBYTECODE=1 python3 tests/tools/test_check_repo.py` 与 `git diff --check`，分别为 E=0 W=0、57 项全部通过、通过；结项状态与 STATUS 同提交同步。该验收仅覆盖文档与治理检查，不代表引擎可运行或目标机已获部署认证。
+- 知识处置：updated；厂商规格、来源与整机 GPU P2P 资格契约归档于 docs/HARDWARE.md，模型 K-M1 的传输前提更新于 docs/MODEL.md，支持方向与理由保留于 D0004；不新增无实测证据的 bench 记录。
+- 剩余义务：P0005 接收硬件资质检查器、部署预检与首台目标机实测义务，保持 draft。这些执行与认证不属于本项研究及文档交付范围，不阻塞本项结项；在 P0005 验收前不得宣称整机已获部署资质。

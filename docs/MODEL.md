@@ -194,7 +194,7 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
 | 编号 | 内容 |
 | --- | --- |
 | K-X1 | 动态激活量化 E4M3+UE8M0（sm120 原生路径）；Ampere 默认 A16；int8 变体同 K-E2 门禁 |
-| K-M1 | NVLink P2P 专家拉取、pinned staging、NVMe direct I/O（**含 engram 行预取通道**）、NUMA 本地放置、逐层 checksum |
+| K-M1 | GPU P2P 专家拉取（NVLink 或 PCIe，拓扑与资质见 [HARDWARE.md](HARDWARE.md)）、pinned staging、NVMe direct I/O（**含 engram 行预取通道**）、NUMA 本地放置、逐层 checksum |
 | K-D1 | DSpark 起草前向（块内无因果掩码的 640-KV 注意力复用 K-A2 缩幅）+ **[R]** 置信度调度验证循环 |
 
 ### 3.9 视觉（`src/vision/`）
