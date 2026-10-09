@@ -8,7 +8,8 @@ P 条目知识处置（knowledge/followups 枚举、引用真实、路径存在�
 条目状态翻转与 STATUS.md 同提交同步、条目文件永不删除。
 
 规则↔条文映射、设计决议与演进规范见 plan/p0001-check-repo.md；
-P 生命周期与知识处置扩展见 P0002 与 D0003；ref/ 提醒范围修订见 P0007。
+P 生命周期与知识处置扩展见 P0002 与 D0003；ref/ 提醒范围修订见 P0007；
+审计中提交级 W 的计数范围修订见 P0008。
 治理起点（epoch）= 首个 plan/decisions/d<NNNN>-*.md 的入库 commit，之前的
 提交一律豁免；epoch 未建立时仅执行树级检查并提示。纯标准库 + git。
 """
@@ -65,7 +66,8 @@ VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 @dataclass
 class V:
-    """一条违例：sev=E/W，anchor 锚定宪法条文或内部规则，obj 为对象。"""
+    """一条违例：sev=E/W/I（I 为审计中评审范围外的提交级 W，只输出不计数），
+    anchor 锚定宪法条文或内部规则，obj 为对象。"""
 
     sev: str
     anchor: str
@@ -545,9 +547,11 @@ def rev_list(repo, spec):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="仓库纪律机械执法器（P0001）")
     ap.add_argument("--repo", default=".", help="仓库路径（默认当前目录）")
-    ap.add_argument("--range", dest="rng", metavar="A..B", help="检查 A..B 内提交")
-    ap.add_argument("--audit", action="store_true", help="epoch 起全历史 + 删除扫描")
-    ap.add_argument("--strict", action="store_true", help="W 级也计入退出码")
+    ap.add_argument("--range", dest="rng", metavar="A..B",
+                    help="检查 A..B 内提交；与 --audit 同用时界定提交级 W 的计数范围")
+    ap.add_argument("--audit", action="store_true",
+                    help="epoch 起全历史 + 删除扫描；--range 外的提交级 W 降为 I")
+    ap.add_argument("--strict", action="store_true", help="W 级也计入退出码（I 不计）")
     args = ap.parse_args(argv)
 
     rr = _git(args.repo, "rev-parse", "--show-toplevel", check=False)
@@ -555,6 +559,15 @@ def main(argv=None):
         print(f"[E] check:internal | - | 不是 git 仓库：{args.repo}", file=sys.stderr)
         return 2
     repo = rr.stdout.strip()
+    if args.rng:
+        if ".." not in args.rng:
+            print("[E] check:internal | - | --range 须为 A..B 形式", file=sys.stderr)
+            return 2
+        bad = [e for e in args.rng.split("..", 1)
+               if git_try(repo, "rev-parse", "--verify", "--quiet", f"{e or 'HEAD'}^{{commit}}") is None]
+        if bad:
+            print(f"[E] check:internal | - | --range 端点无法解析为提交：{bad}", file=sys.stderr)
+            return 2
 
     violations = []
 
@@ -565,6 +578,7 @@ def main(argv=None):
     scan_tree(ctx, out)
 
     epoch = find_epoch(repo)
+    w_scope = None
     if epoch is None:
         out(V("W", "check:epoch", "-",
               "治理起点未入库（plan/decisions/ 无 d<NNNN> 条目入库 commit），提交级检查跳过"))
@@ -575,17 +589,18 @@ def main(argv=None):
         governed.add(epoch)
         if args.audit:
             shas = rev_list(repo, f"{epoch}..HEAD") + [epoch]
+            w_scope = set(rev_list(repo, args.rng)) if args.rng else set()
         elif args.rng:
-            if ".." not in args.rng:
-                print("[E] check:internal | - | --range 须为 A..B 形式", file=sys.stderr)
-                return 2
             shas = [s for s in rev_list(repo, args.rng) if s in governed]
         else:
             head = (git_try(repo, "rev-parse", "HEAD") or "").strip()
             shas = [head] if head in governed else []
 
+    def demote_w(v):
+        out(V("I", v.anchor, v.obj, v.msg) if v.sev == "W" else v)
+
     for sha in shas:
-        check_commit(repo, sha, ctx, out)
+        check_commit(repo, sha, ctx, out if w_scope is None or sha in w_scope else demote_w)
 
     if args.audit and epoch:
         audit_deletions(repo, epoch, out)
@@ -594,7 +609,8 @@ def main(argv=None):
         print(v.fmt())
     es = [v for v in violations if v.sev == "E"]
     ws = [v for v in violations if v.sev == "W"]
-    print(f"SUMMARY E={len(es)} W={len(ws)}")
+    infos = [v for v in violations if v.sev == "I"]
+    print(f"SUMMARY E={len(es)} W={len(ws)} I={len(infos)}")
     return 1 if es or (args.strict and ws) else 0
 
 

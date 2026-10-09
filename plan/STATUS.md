@@ -13,6 +13,7 @@
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 承接 P0004 的硬件预检、部署接线与实机验证义务；缺目标机与 CUDA 探针构建环境，未启动 |
 | [P0006 — ref 格式 oracle](p0006-ref-format-oracle.md) | draft | 范围与验收已确认，仅完成计划登记；按用户要求暂不开始实现，尚无数值验收证据 |
 | [P0007 — ref/ 触碰提醒收窄](p0007-ref-touch-scope.md) | completed | 用户确认结项；新建 ref/ 文件不再提醒，既有 oracle 文件的修改与删除仍为 W，knowledge: covered |
+| [P0008 — 审计 W 计数范围](p0008-audit-history-w.md) | active | 检查器修订与规则测试已完成，待审阅后提交合入 |
 
 ## 开发入口与缺口
 
