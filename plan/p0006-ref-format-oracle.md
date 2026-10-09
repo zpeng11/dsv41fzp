@@ -34,6 +34,7 @@ followups: []
 - 既有依据：[MODEL §2.1～§2.3](../docs/MODEL.md#2-结构与格式)、[K-Q1～K-Q3](../docs/MODEL.md#31-格式编解码srcquant)、[精确性链条](../docs/MODEL.md#4-精确性链条)；官方只读仲裁点为 `third_party/reference/inference/convert.py` 的 FP4_TABLE 与 nibble 展开、`model.py` 的权重/Engram/KV 格式用途，以及 `kernel.py` 的数值运算与 cast 位置。官方镜像来源见 [PROVENANCE](../third_party/reference/PROVENANCE.md)；不把 torch dtype 名称存在视为对应 CPU 操作可用的证据。
 - 知识拟归档到 `docs/QUANT.md`，由 `docs/MODEL.md` 路由；该文档尚未创建，仅在此记录归档目标，不在 front matter 填入悬空路径。本次不修改 docs，未来内容性写入仍按宪法取得用户确认；验收前须完成必要知识归档。
 - 本项不依赖 P0005 的目标机验证，也不依赖尚未定案的 C++ 构建或性能 bench 工作流；未来引擎、硬件与性能验收仍须满足各自前置条件。本项不新增性能论断。
+- 2026-10-09：用户确定本项 `ref/` 相关提交沿用 `quant` area，不修宪；检查器对新建 `ref/` 文件的误报由 P0007 处理，提交 oracle 代码前须待其合入。同一分支内修改本分支新建的 `ref/` 文件仍会提醒，合入前整理提交，使每个新文件只由一个提交引入。
 
 ## 收尾
 
