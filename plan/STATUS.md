@@ -11,7 +11,8 @@
 | 工作项 | 状态 | 当前进度或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 承接 P0004 的硬件预检、部署接线与实机验证义务；缺目标机与 CUDA 探针构建环境，未启动 |
-| [P0006 — ref 格式 oracle](p0006-ref-format-oracle.md) | draft | 范围与验收已确认，仅完成计划登记；按用户要求暂不开始实现，尚无数值验收证据 |
+| [P0006 — ref 格式 oracle](p0006-ref-format-oracle.md) | draft | 范围与验收已确认，仅完成计划登记；按用户要求暂不开始实现，尚无数值验收证据；提交 oracle 代码前置 P0007 |
+| [P0007 — ref/ 触碰提醒收窄](p0007-ref-touch-scope.md) | active | 检查器修订与规则测试已完成，待审阅后提交合入 |
 
 ## 开发入口与缺口
 

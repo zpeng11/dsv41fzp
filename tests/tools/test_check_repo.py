@@ -1,4 +1,4 @@
-"""check_repo.py 的规则级测试（P0001 / P0002 / P0003）：临时仓库验证受治/违规两侧。
+"""check_repo.py 的规则级测试（P0001 / P0002 / P0003 / P0007）：临时仓库验证受治/违规两侧。
 
 运行：python3 tests/tools/test_check_repo.py
 """
@@ -231,10 +231,6 @@ class CheckRepoTests(unittest.TestCase):
 
     def test_warn_levels(self):
         baseline(self.fx)
-        self.fx.commit("P0001 tools: oracle tweak", {"ref/model.py": "x\n"})
-        rc, out = self.fx.check()
-        self.assertEqual(rc, 0, out)
-        self.assertIn("[W]", out)
         self.fx.commit("P0001 tools: prompt tweak", {"bench/prompts/p.txt": "x\n"})
         rc, out = self.fx.check()
         self.assertEqual(rc, 0, out)
@@ -317,6 +313,74 @@ class CheckRepoTests(unittest.TestCase):
         rc, out = self.fx.check()
         self.assertEqual(rc, 1)
         self.assertIn("悬空", out)
+
+
+class OracleTouchTests(unittest.TestCase):
+    """ref/ 提醒只针对第一父中已存在文件的修改、删除与改名（P0007）。"""
+
+    def setUp(self):
+        self.fx = Fixture()
+        self.addCleanup(shutil.rmtree, self.fx.dir)
+        baseline(self.fx)
+
+    def oracle_warnings(self, *args):
+        rc, out = self.fx.check(*args)
+        return rc, out, [ln for ln in out.splitlines() if "ref/（oracle）" in ln]
+
+    def merge_branch(self, branch, files, subject):
+        self.fx.git("checkout", "-q", "-b", branch)
+        self.fx.commit(f"P0001 tools: work on {branch}", files)
+        self.fx.git("checkout", "-q", "main")
+        self.fx.git("merge", "--no-ff", "--no-commit", "-q", branch)
+        self.fx.write("VERSION", "0.1.1\n")
+        self.fx._commit(subject)
+
+    def test_new_file_passes_strict_audit(self):
+        self.fx.commit("P0001 tools: add oracle", {"ref/fmt.py": "x\n"})
+        rc, out, hits = self.oracle_warnings("--audit", "--strict")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(hits, [], out)
+
+    def test_merge_new_file_passes_strict_audit(self):
+        self.merge_branch("p0001-oracle", {"ref/fmt.py": "x\n"}, "Merge P0001: add oracle")
+        rc, out, hits = self.oracle_warnings("--audit", "--strict")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(hits, [], out)
+
+    def test_modify_existing_warns_only_existing(self):
+        self.fx.commit("P0001 tools: add oracle", {"ref/fmt.py": "x\n"})
+        self.fx.commit("P0001 tools: tweak oracle", {"ref/fmt.py": "y\n", "ref/new.py": "x\n"})
+        rc, out, hits = self.oracle_warnings()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(hits), 1, out)
+        self.assertIn("ref/fmt.py", hits[0])
+        self.assertNotIn("ref/new.py", hits[0])
+        rc, out, _ = self.oracle_warnings("--strict")
+        self.assertEqual(rc, 1, out)
+
+    def test_delete_existing_warns(self):
+        self.fx.commit("P0001 tools: add oracle", {"ref/fmt.py": "x\n"})
+        self.fx.remove("ref/fmt.py")
+        self.fx.commit("P0001 tools: drop oracle")
+        _, out, hits = self.oracle_warnings()
+        self.assertEqual(len(hits), 1, out)
+        self.assertIn("ref/fmt.py", hits[0])
+
+    def test_rename_existing_warns(self):
+        self.fx.commit("P0001 tools: add oracle", {"ref/fmt.py": "x\n"})
+        self.fx.git("mv", "ref/fmt.py", "ref/codec.py")
+        self.fx.commit("P0001 tools: rename oracle")
+        _, out, hits = self.oracle_warnings()
+        self.assertEqual(len(hits), 1, out)
+        self.assertIn("ref/fmt.py", hits[0])
+        self.assertNotIn("ref/codec.py", hits[0])
+
+    def test_merge_modifying_existing_warns(self):
+        self.fx.commit("P0001 tools: add oracle", {"ref/fmt.py": "x\n"})
+        self.merge_branch("p0001-tweak", {"ref/fmt.py": "y\n"}, "Merge P0001: tweak oracle")
+        _, out, hits = self.oracle_warnings()
+        self.assertEqual(len(hits), 1, out)
+        self.assertIn("ref/fmt.py", hits[0])
 
 
 class SupersedeTests(unittest.TestCase):

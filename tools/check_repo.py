@@ -8,7 +8,7 @@ P 条目知识处置（knowledge/followups 枚举、引用真实、路径存在�
 条目状态翻转与 STATUS.md 同提交同步、条目文件永不删除。
 
 规则↔条文映射、设计决议与演进规范见 plan/p0001-check-repo.md；
-P 生命周期与知识处置扩展见 P0002 与 D0003。
+P 生命周期与知识处置扩展见 P0002 与 D0003；ref/ 提醒范围修订见 P0007。
 治理起点（epoch）= 首个 plan/decisions/d<NNNN>-*.md 的入库 commit，之前的
 提交一律豁免；epoch 未建立时仅执行树级检查并提示。纯标准库 + git。
 """
@@ -459,8 +459,12 @@ def check_commit(repo, sha, ctx, out):
     if any(f != PROVENANCE for f in ref_touched) and PROVENANCE not in files:
         out(V("E", "AGENTS:禁区", tag, "third_party/reference/ 只读：触碰须同提交更新 PROVENANCE.md"))
 
-    if any(f.startswith("ref/") for f in files):
-        out(V("W", "AGENTS:禁区", tag, "ref/（oracle）被触碰：须确认 oracle 自身有误并写明依据"))
+    if parents:
+        oracle_existing = [f for f in files if f.startswith("ref/")
+                           and git_try(repo, "cat-file", "-e", f"{sha}^1:{f}") is not None]
+        if oracle_existing:
+            out(V("W", "AGENTS:禁区", tag,
+                  f"ref/（oracle）既有文件被修改或删除：须确认 oracle 自身有误并写明依据：{oracle_existing[:3]}"))
     if any(f.startswith(FROZEN_PREFIXES) for f in files):
         out(V("W", "AGENTS:禁区", tag, "冻结区被触碰：视为新工件，须重算 manifest 并说明"))
 
