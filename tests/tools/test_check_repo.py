@@ -1,4 +1,4 @@
-"""check_repo.py 的规则级测试（P0001 / P0002 / P0003 / P0007）：临时仓库验证受治/违规两侧。
+"""check_repo.py 的规则级测试（P0001 / P0002 / P0003 / P0007 / P0008）：临时仓库验证受治/违规两侧。
 
 运行：python3 tests/tools/test_check_repo.py
 """
@@ -381,6 +381,101 @@ class OracleTouchTests(unittest.TestCase):
         _, out, hits = self.oracle_warnings()
         self.assertEqual(len(hits), 1, out)
         self.assertIn("ref/fmt.py", hits[0])
+
+
+class AuditHistoryTests(unittest.TestCase):
+    """审计中提交级 W 只在 --range 内计数，范围外降为 I；E 与树级 W 不变（P0008）。"""
+
+    def setUp(self):
+        self.fx = Fixture()
+        self.addCleanup(shutil.rmtree, self.fx.dir)
+        baseline(self.fx)
+        self.fx.commit("P0001 tools: add oracle", {"ref/fmt.py": "x\n"})
+
+    def head(self):
+        return self.fx.git("rev-parse", "HEAD").stdout.strip()
+
+    def lines(self, out, sev):
+        return [ln for ln in out.splitlines() if ln.startswith(f"[{sev}]")]
+
+    def test_history_w_demoted_in_strict_audit(self):
+        self.fx.commit("P0001 tools: tweak oracle", {"ref/fmt.py": "y\n"})
+        self.fx.commit("P0001 tools: add golden", {"tests/data/g.bin": "x\n"})
+        self.fx.commit("meta: reformat", {"src/core/a.cpp": "x\n"})
+        rc, out = self.fx.check("--audit", "--strict")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.lines(out, "W"), [], out)
+        infos = "\n".join(self.lines(out, "I"))
+        for key in ("ref/（oracle）", "冻结区", "meta: 提交触碰源码"):
+            self.assertIn(key, infos)
+        self.assertIn("SUMMARY E=0 W=0 I=3", out)
+
+    def test_range_w_counted_in_strict_audit(self):
+        self.fx.commit("P0001 tools: add golden", {"tests/data/g.bin": "x\n"})
+        base = self.head()
+        self.fx.commit("P0001 tools: tweak oracle", {"ref/fmt.py": "y\n"})
+        rc, out = self.fx.check("--audit", "--range", f"{base}..HEAD", "--strict")
+        self.assertEqual(rc, 1, out)
+        warns, infos = self.lines(out, "W"), self.lines(out, "I")
+        self.assertEqual(len(warns), 1, out)
+        self.assertIn("ref/（oracle）", warns[0])
+        self.assertEqual(len(infos), 1, out)
+        self.assertIn("冻结区", infos[0])
+        rc, out = self.fx.check("--range", f"{base}..HEAD", "--strict")
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("冻结区", out)
+
+    def test_merged_fix_counted_until_out_of_range(self):
+        base = self.head()
+        self.fx.git("checkout", "-q", "-b", "p0001-fix")
+        self.fx.commit("P0001 tools: fix oracle", {"ref/fmt.py": "y\n"})
+        self.fx.git("checkout", "-q", "main")
+        self.fx.git("merge", "--no-ff", "--no-commit", "-q", "p0001-fix")
+        self.fx.write("VERSION", "0.1.1\n")
+        self.fx._commit("Merge P0001: fix oracle")
+        rc, out = self.fx.check("--audit", "--range", f"{base}..HEAD", "--strict")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(len(self.lines(out, "W")), 2, out)
+        rc, out = self.fx.check("--audit", "--strict")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(self.lines(out, "I")), 2, out)
+        self.fx.commit("P0001 tools: next step", {"tools/a.py": "x\n"})
+        rc, out = self.fx.check("--audit", "--range", "HEAD~1..HEAD", "--strict")
+        self.assertEqual(rc, 0, out)
+
+    def test_audit_range_requires_dotdot(self):
+        rc, out = self.fx.check("--audit", "--range", "HEAD", "--strict")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("A..B", out)
+
+    def test_range_unresolvable_ref_errors(self):
+        self.fx.commit("P0001 tools: tweak oracle", {"ref/fmt.py": "y\n"})
+        for args in (("--audit", "--range", "nosuch..HEAD"), ("--range", "nosuch..HEAD"),
+                     ("--audit", "--range", "HEAD..nosuch")):
+            rc, out = self.fx.check(*args, "--strict")
+            self.assertEqual(rc, 2, out)
+            self.assertIn("无法解析", out)
+
+    def test_empty_valid_range_passes(self):
+        self.fx.commit("P0001 tools: tweak oracle", {"ref/fmt.py": "y\n"})
+        rc, out = self.fx.check("--audit", "--range", "HEAD..HEAD", "--strict")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(self.lines(out, "I")), 1, out)
+
+    def test_history_e_still_counted(self):
+        self.fx.commit("no format here", {"a.txt": "1\n"})
+        self.fx.commit("P0001 tools: good", {"a.txt": "2\n"})
+        rc, out = self.fx.check("--audit", "--range", "HEAD~1..HEAD", "--strict")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("subject", out)
+
+    def test_tree_w_still_counted(self):
+        fx = Fixture()
+        self.addCleanup(shutil.rmtree, fx.dir)
+        fx.commit("chore: seed", {"README.md": "x\n"})
+        rc, out = fx.check("--audit", "--strict")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("[W] check:epoch", out)
 
 
 class SupersedeTests(unittest.TestCase):
