@@ -4,21 +4,20 @@
 
 ## 当前阶段
 
-**开发阶段初期，当前推进 P0006 格式 oracle。** 目录骨架、模型/硬件事实文档与治理检查工具已有；数值代码尚未实现，没有格式验收证据、目标机验证或引擎性能基线，不处于可部署阶段。
+**开发阶段初期，P0006 格式 oracle 已通过用户评审与本地 CPU 测试，必要知识已归档，待合入结项。** 目录骨架、模型/硬件事实文档与治理检查工具已有；没有目标机验证或引擎性能基线，不处于可部署阶段。
 
 ## 当前工作项
 
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
-| [P0006 — ref 格式 oracle](p0006-ref-format-oracle.md) | active | 已授权开工；下一步实现 `ref/` 格式慢参照与 `tests/quant/` 独立测试，见下方编码目标；P0007 前置已满足 |
+| [P0006 — ref 格式 oracle](p0006-ref-format-oracle.md) | active | 用户评审与必选 CPU 测试通过，必要知识已归档到 docs/QUANT.md；待合入提交同步结项 |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动；不阻塞 P0006 的 CPU 验收 |
 
-## 下一步编码目标：P0006
+## P0006 交付入口与待办
 
-- 实现入口：`p0006-ref-format-oracle` 短命分支；范围与验收以 [P0006](p0006-ref-format-oracle.md#验收) 为准。
-- 首先核实格式变体、特殊值与零符号、FP32 运算及 BF16 舍入依据，再实现 E2M1、E4M3FN、E8M0 与 BF16 位模式 codec、E2M1 打包/展开及精确整数格。
-- 编写码点穷举与独立预期值测试，再覆盖给定 scale 的逐行分组及二维块反量化、布局边界、错误输入与 BF16 落点；提供一条不依赖 CUDA、TileLang 或模型权重的 CPU 验收命令。
-- 必要格式知识归档到 `docs/QUANT.md` 并由 `docs/MODEL.md` 路由，内容性写入仍须用户确认；知识未归档、验收未成立前保持 active，不推进生产 `src/quant` 或宣称 GPU/kernel parity。
+- 实现分支：`p0006-ref-format-oracle`；代码入口为 `ref/formats.py` 与 `ref/dequant.py`，范围与验收以 [P0006](p0006-ref-format-oracle.md#验收) 为准。
+- 复现命令：`python3 tests/quant/test_formats.py`，仅标准库；覆盖码点穷举、E2M1 打包与整数格、FP32/BF16 舍入、给定 scale 的逐行及二维块反量化和错误输入。环境与运行证据见 P0006 记录。
+- 数值契约已归档到 [docs/QUANT.md](../docs/QUANT.md)，由 docs/MODEL.md 路由；用户已确认评审通过。当前保持 active，合入时同步结项；不宣称生产 `src/quant`、GPU/kernel parity 或端到端验证完成。
 
 ## 其他入口与缺口
 

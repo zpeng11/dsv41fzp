@@ -1,0 +1,61 @@
+# QUANT.md — 格式 oracle 数值契约
+
+模型用途、分组大小与官方路径以 [MODEL.md](MODEL.md#2-结构与格式) 为模型事实源。本页归档 P0006 首块 `ref/` 格式 oracle 的位表示、异常契约和验证边界，不建立第二个生产格式配置中心；生产量化真源仍为 `src/quant`。
+
+## 1. 来源与验证方法
+
+- **[MX]** [OCP Microscaling Formats (MX) v1.0，Sep 2023](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf)：§5.3、Table 5（E2M1）、Table 7（E8M0）、Table 2（E4M3，复录 OFP8）。原件 SHA256：`d195d6a36dd4a0c89064af0c479bcaad5c0fe29d63f628502ea6d7c4b4279421`；2026-10-10 从 [原件的存档快照](https://web.archive.org/web/20261002180025id_/https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf) 取回。
+- **[FP8]** [FP8 Formats for Deep Learning，arXiv:2209.05433v2](https://arxiv.org/abs/2209.05433v2)：Table 1 交叉验证 E4M3FN 的特殊编码、bias 与次正规范围。
+- **[BF16]** [PyTorch BFloat16.h](https://raw.githubusercontent.com/pytorch/pytorch/main/torch/headeronly/util/BFloat16.h)：2026-10-10 检索快照，`detail::round_to_nearest_even`，RNE 默认；来源文件 SHA256：`302c7ba9e45d361efc5ef6ebce3b67a0cc4083bd09b60851e350273d650ff48b`。该 URL 为浮动 main，不宣称已 pin 对应上游 commit。
+- **[PTX]** [NVIDIA PTX ISA](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html)：§5.2.3 替代浮点格式、§6.5.2 rounding、§9.7.3 subnormal/`.ftz`；仅用作浮点契约依据，不当作本机 GPU parity 证据。
+- **[代码]** 官方模型只读镜像的 commit 与来源见 [PROVENANCE](../third_party/reference/PROVENANCE.md)。上述格式定义补足官方实现仅通过 dtype 指定、未自行定义的编码语义。
+- **[参照]** 本仓 [ref/formats.py](../ref/formats.py)、[ref/dequant.py](../ref/dequant.py)；**[测试]** [tests/quant/test_formats.py](../tests/quant/test_formats.py)。
+
+本页编码数字是规格值，不是吞吐或性能测量。验证环境为 Python 3.12.8（conda-forge，GCC 13.3.0）、Linux 5.15.0-72-generic x86_64 / glibc 2.43、Intel Xeon Platinum 8350C；依赖仅标准库，不依赖 NumPy、Torch、GPU 或模型权重。方法为整数位域解码、整数有效数乘法与显式 RNE；独立测试用 `Fraction` 位域定义和相邻格点距离比较。验收命令与证据保留在 [P0006](../plan/p0006-ref-format-oracle.md#收尾)。
+
+## 2. 位模式与零符号
+
+| 格式 | 本 oracle 契约 | 依据 |
+| --- | --- | --- |
+| E2M1 | `S EE M`，bias 1；幅值及整数格见 MODEL §2.3；原生解码保留 `0000` 正零和 `1000` 负零；无 Inf/NaN | [MX] Table 5 |
+| E4M3FN | `S EEEE MMM`，bias 7；含次正规、正负零；`0x7F/0xFF` 是 NaN，无 Inf；不是 FNUZ 变体 | [MX] Table 2、[FP8] Table 1 |
+| E8M0 / UE8M0 | `eeeeeeee`，无符号，bias 127；`0x00..0xFE` 为 `2^(code-127)`；`0xFF` 是 NaN；没有零或 Inf。`0x00` 在 FP32 中是次正规数而非零 | [MX] Table 7 |
+| BF16 | `S EEEEEEEE MMMMMMM`，bias 127；解码为相同位段左移到 FP32，含次正规、正负零、Inf、NaN | [BF16]、[PTX] |
+
+官方 `convert.py:13–15` 的 FP4_TABLE 将码点 8 写成正零。[代码] 本 oracle 的原生 E2M1 解码遵守带符号零定义，不宣称该码点与官方 LUT 逐位相同；独立测试显式验证这一差异，其他码点与官方常量按位相等。[MX][测试]
+
+E2M1 整数格为解码值乘二的精确整数。正负零都变成整数零，反向整数格规范编码为码点 0；只接受精确整型格点，拒绝 bool、浮点输入及非格点。原始编码可逆性由 nibble/byte 层保证，不要求数值或整数格恢复负零编码。[参照][测试]
+
+所有原始 nibble/byte/位模式只收对应宽度的非负 Python 整数，不接受负的 int8 数值。打包输入用 `bytes` 或 `0..255` 元素；来自 int8 存储时应在调用方按位重解释为原始字节，不能算术右移。低半字节是最后维度中先出现的元素；逻辑最后维必须偶数，逐行配对，不截断、不填充。显式 shape 与元素数量必须精确匹配。[代码] `convert.py:31–34`；[参照][测试]
+
+## 3. 浮点运算与输出
+
+- `fp32_bits` 将 Python float/int 按 binary32 的 RNE 转换；`fp32_from_bits` 读取位模式。NaN payload/quiet-signaling 状态不承诺保留。[参照]
+- `multiply_fp32` 先将两个操作数落到 FP32，精确乘整数有效数，再进行一次 FP32 RNE。次正规结果渐进下溢，零符号遵守乘法符号；上溢为带符号 Inf，不钳制。实现不依赖宿主 FP32 乘法、GPU FTZ 或库 dtype。[参照][测试] 这是本 oracle 选择的运算契约；MX §5.1 对超出 Float32 范围的编码值允许实现自定义，不能从该选择推出所有 MX/GPU 路径相同。
+- `fp32_bits_to_bf16` 按 RNE（中点取偶）转换 FP32 位模式；`encode_bf16` 先 FP32 再 BF16，**不是 Python binary64 直接舍入到 BF16**。有限溢出转 Inf，次正规/下溢按 RNE；正负零保留。[BF16][参照][测试] NaN 规范化为 quiet NaN并保留符号，但测试与 parity 只比较分类，不承诺 payload 或与 GPU 的 NaN 位模式相等；也不声称该 NaN 符号策略与 PyTorch CPU 的规范正 NaN 相同。
+- 反量化默认返回 FP32 值。`output="bf16"` 返回 **BF16 原始整数位模式**，保留 shape；此选项描述独立输出边界，不强制任何 GEMM 在逐元素乘 scale 后提前落 BF16。[参照]
+
+## 4. 反量化 API 与布局
+
+`ref.dequant.Tensor(data, shape)` 使用 flat row-major 数据及显式 shape，不隐式广播；允许零元素张量，shape 必须非空、各维是非负整数。[参照]
+
+- `dequantize_expert`：二维 packed E2M1 与逐行 E8M0 scale。
+- `dequantize_fp8_weights`：二维 E4M3FN 与二维块 E8M0 scale，尾块用向上取整 shape。
+- `dequantize_engram`：二维 E4M3FN 行与逐行 E8M0 scale。
+- `dequantize_swa`：E4M3FN 与沿最后维度分组 E8M0 scale，支持批维。
+- `dequantize_main_kv`：packed E2M1 与沿最后维度分组 E4M3FN scale，支持批维。
+- `dequantize_index_k`：packed E2M1 与沿最后维度分组 E8M0 scale，支持批维。
+
+以上入口依据 [MODEL §2.1～§2.3](MODEL.md#2-结构与格式) 的模型用途和分组定义实现。[代码][参照] 逐行路径要求逻辑最后维整除组大小，scale shape 精确为前导维加组数；二维块路径覆盖非整块尾部，不接受转置或仅元素数量相等的错误 scale shape。[参照][测试]
+
+底层 codec 识别全部编码；模型反量化入口拒绝 NaN 数据/scale 和非正或非有限 scale。非法编码/shape/输出模式抛 `ValueError`，非整数位模式/shape 抛 `TypeError`。有效输入的乘积可超出 FP32 或 BF16 范围，遵守上述浮点输出规则，不静默钳制。拒绝坏输入是本 oracle 入口契约，不宣称官方所有入口也如此校验。[参照][测试]
+
+## 5. 验证链边界
+
+测试入口为 `python3 tests/quant/test_formats.py`（从仓库根运行，也支持从其他 cwd 按绝对路径运行）。必选穷举与边界无 skip，无可选 dtype 依赖；来源快照或网络不参与运行。[测试]
+
+独立期望值由有理数位域定义、FP32 有序编码搜索、BF16 相邻格点距离比较构造，不调用被测 LUT/舍入辅助函数；官方 FP4_TABLE 用 AST 读取字面常量，不导入官方 GPU 模块。测试不写入 `tests/data/`，没有新增冻结区工件或 manifest。[测试]
+
+官方落点需按路径区分：Engram `model.py:319–320`、转换器 `convert.py:157–173` 的 wo_a 路径有明确 BF16 落点；KV/SWA 的 inplace 量化回写输入 dtype（`kernel.py:82–86,167–172`）；专家 `kernel.py:538–553` 是 FP4→FP32→FP8 后 GEMM，再对累加值应用 scale。[代码] 不能从逐元素反量化验收推出移动 scale、提前 BF16 舍入或整数点积改写的等价性。
+
+本 oracle 不证明有损量化、scale 生成、动态 KV 量化、GPU cast/FTZ、kernel parity、checkpoint 转换或端到端模型一致，也不替代 `src/quant` 或 K-Q1～K-Q3 的引擎实现验收。验证链路由见 [MODEL §4](MODEL.md#4-精确性链条)。
