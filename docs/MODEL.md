@@ -46,13 +46,15 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
 
 ### 2.3 数值格式速查（`src/quant/` 规格）
 
+位模式、特殊值、FP32 运算与 BF16 舍入契约见 [QUANT.md](QUANT.md)；格式 oracle 不替代生产 `src/quant` 或 GPU/kernel parity 验收。
+
 | 格式 | 关键性质 |
 | --- | --- |
 | E2M1 | 幅值 {0,.5,1,1.5,2,3,4,6}；**×2 → 精确整数 {0,1,2,3,4,6,8,12}** → int8 数据通路位精确映射（IMMA/dp4a/VNNI）的根本依据 [算]；积 ≤12×127，32 项累加 ≤48,768，int32 无溢出 [算] |
 | UE8M0 | 8 位纯指数；折出点积为精确指数运算 [算] |
 | E4M3 | →BF16 精确；sm120 原生 TC，sm80 需反量化或 int8 格映射 |
 | KV 双格式 | **主 KV：E2M1 + E4M3 scale/16ch（RoPE 之后量化）**；**索引 K：E2M1 + UE8M0 scale/32ch（MXFP4）**；SWA KV：FP8 E4M3 + UE8M0/32 [代码] |
-| 参考实现注记 | 官方参考实现中 FP4 反量化回 BF16 参与计算（"FP4 只省存储"）；本引擎对索引 QK 与专家 GEMM 做格映射加速是对官方行为的**精确等价改写**（parity 锁定） | [代码] |
+| 参考实现注记 | 官方专家路径把 FP4 经 FP32 转为 FP8 参与 GEMM，再对累加值应用 scale；KV 的 inplace 量化回写输入 dtype，不可总括为所有 FP4 路径先反量化到 BF16。索引 QK 与专家 GEMM 的整数格改写须另行验证运算顺序、舍入与 parity，格式解码精确不单独证明计算等价 | [代码] kernel.py:167–172、538–553；详见 [QUANT §5](QUANT.md#5-验证链边界) |
 
 ### 2.4 KV cache（890 B/token 精确分解，已验证）
 
