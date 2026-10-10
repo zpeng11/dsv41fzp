@@ -4,17 +4,23 @@
 
 ## 当前阶段
 
-**开发阶段初期**。目录骨架、模型/硬件事实文档与治理检查工具已有；推理引擎、FP32 oracle、构建、CI、部署器和硬件资质检查器尚未实现。当前没有目标机验证或引擎性能基线，不处于密集实现或可部署阶段。
+**开发阶段初期，当前推进 P0006 格式 oracle。** 目录骨架、模型/硬件事实文档与治理检查工具已有；数值代码尚未实现，没有格式验收证据、目标机验证或引擎性能基线，不处于可部署阶段。
 
 ## 当前工作项
 
-| 工作项 | 状态 | 当前进度或阻塞 |
+| 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
-| [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 承接 P0004 的硬件预检、部署接线与实机验证义务；缺目标机与 CUDA 探针构建环境，未启动 |
-| [P0006 — ref 格式 oracle](p0006-ref-format-oracle.md) | draft | 范围与验收已确认，仅完成计划登记；按用户要求暂不开始实现，尚无数值验收证据 |
+| [P0006 — ref 格式 oracle](p0006-ref-format-oracle.md) | active | 已授权开工；下一步实现 `ref/` 格式慢参照与 `tests/quant/` 独立测试，见下方编码目标；P0007 前置已满足 |
+| [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动；不阻塞 P0006 的 CPU 验收 |
 
-## 开发入口与缺口
+## 下一步编码目标：P0006
 
-- 硬件支持范围及资质门槛：[docs/HARDWARE.md](../docs/HARDWARE.md)；支持方向：[D0004](decisions/d0004-gpu-p2p-support.md)。PCIe 5.0 RTX PRO 6000 的支持以逐对双向 P2P 与正确性验收为条件。
-- 数值实现须先建立 [ref/](../ref/) 的验证根，再推进 quant 与计算路径；首个格式 oracle 工作项为 [P0006](p0006-ref-format-oracle.md)，当前仅规划，按用户要求暂不开始实现。其 CPU 验收不依赖 P0005 的目标机或 C++ 构建；模型契约见 [docs/MODEL.md](../docs/MODEL.md)。
-- 构建与 bench 工作流仍待定，CI 未接线；硬件资格与性能阈值尚无目标机证据。
+- 实现入口：`p0006-ref-format-oracle` 短命分支；范围与验收以 [P0006](p0006-ref-format-oracle.md#验收) 为准。
+- 首先核实格式变体、特殊值与零符号、FP32 运算及 BF16 舍入依据，再实现 E2M1、E4M3FN、E8M0 与 BF16 位模式 codec、E2M1 打包/展开及精确整数格。
+- 编写码点穷举与独立预期值测试，再覆盖给定 scale 的逐行分组及二维块反量化、布局边界、错误输入与 BF16 落点；提供一条不依赖 CUDA、TileLang 或模型权重的 CPU 验收命令。
+- 必要格式知识归档到 `docs/QUANT.md` 并由 `docs/MODEL.md` 路由，内容性写入仍须用户确认；知识未归档、验收未成立前保持 active，不推进生产 `src/quant` 或宣称 GPU/kernel parity。
+
+## 其他入口与缺口
+
+- 模型与验证链：[docs/MODEL.md](../docs/MODEL.md)；硬件支持与资质：[docs/HARDWARE.md](../docs/HARDWARE.md)、[D0004](decisions/d0004-gpu-p2p-support.md)。
+- 构建与 bench 工作流仍待定，CI 未接线；硬件资格与性能阈值仍缺目标机证据，不作为 P0006 格式实现的前置条件。
