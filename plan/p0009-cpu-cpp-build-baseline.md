@@ -59,6 +59,20 @@ followups: []
 - 2026-10-10：用户选定工具由 conda/pip 管理、dirty 在构建时判定；版本信息验收改为构建时刷新，仍只验证干净与 dirty 两态，状态组合矩阵保持移出。
 - 2026-10-10：用户接受 D0005 并授权推进；P0009 翻转为 active，实现走 `p0009-cpu-cpp-build-baseline` 分支。
 
+### 验收证据（待用户评审）
+
+环境：Intel Xeon Platinum 8350C 双路（FMA/AVX-512F/AVX-512 VNNI），Ubuntu 26.04 LTS，Linux 5.15.0-72-generic x86_64；`g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0`；CMake/CTest 4.4.4 与 Ninja 1.13.2 均经 `pip install cmake ninja` 装入 `/root/miniforge`（Python 3.12.8）；Git 2.54.0。实现提交为分支上的 `P0009 ci: 建立 CPU-only CMake/CTest 构建与测试基线`。
+
+- 构建与测试：`cpu-debug`、`cpu-release` 均按 `cmake --preset` / `cmake --build --preset` / `ctest --preset` 完成，8/8 通过，构建零告警；从 `/tmp` 用 `ctest --test-dir` 运行同样 8/8。全新本地克隆跑 `cpu-release` 8/8，`git status --ignored` 仅见 `build/`。CMakeCache 无 CUDA 项。
+- 注册的测试：`bb.smoke`（静态库与消费者跨 TU 链接）、`bb.version`、`bb.fp_env`、`bb.contract.strict`、`bb.contract.fast_control`、`bb.compile_flags`、`quant.formats`、`tools.check_repo`。
+- 数值前提：`bb_fp_env` 在默认环境下通过 RNE、正负零、次正规输出与输入、MXCSR FTZ/DAZ 位检查，并在进程内切到 FE_UPWARD、FTZ、DAZ 后对应检查均识别违规。收缩探针固定 `-O2 -mfma`：严格版得 `0x0p+0`，`-ffp-contract=fast` 对照版得 `0x1p-24`。`bb.compile_flags` 从 `compile_commands.json` 验证严格选项只出现在 `bb_fp_env`、`bb_contract_strict`，无关 target 无严格选项与 `-mfma`，全部 target 为 `-std=c++20`、无 fast-math 与 `-march`。
+- 开发中发现：`-O0` 下运行时计算的期望值（`std::ldexp`）同样受 FTZ 影响，使 FTZ 反例被掩盖；改为十六进制字面量后反例生效。
+- 矛盾选项：`-DCMAKE_CXX_FLAGS="-O2 -ffast-math"` 与 `CXXFLAGS=-ffp-contract=fast` 均在 configure 时 FATAL_ERROR。
+- 缺失前提：`-DPython3_EXECUTABLE=/nonexistent/python3` configure 失败；非 Git 目录中 configure 成功但 build 在版本生成步骤失败，不伪造 SHA。
+- 失败传播：临时在 `test_formats.py` 首行注入 `SystemExit` 及临时改错 smoke 期望值，CTest 均返回 8；恢复后通过，工作树无残留。
+- 版本刷新（工作仓库，干净树）：configure+build 显示 `0.1.7`、dirty=0；不改动再 build 只执行刷新步骤、无重编；追加一行到 `README.md` 后只 build，重编 `version.cpp` 并显示 `0.1.7+dirty`，`bb.version` 通过；撤销后 build 恢复 `0.1.7`。
+- 未验证：非 GCC 编译器与非 Linux x86_64 平台的拒绝分支（本机无 Clang，未演练）。
+
 ## 收尾
 
 - 验收或停止依据：仅设计，尚未启动实现；验收清单未勾选，无 C++ 构建或数值前提通过的论断。
