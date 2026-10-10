@@ -11,7 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
-| [P0009 — CPU-only C++ 构建与测试基线](p0009-cpu-cpp-build-baseline.md) | draft | 设计已落盘，构建契约待评审；缺 CMake/CTest/Ninja，未开始实现 |
+| [P0009 — CPU-only C++ 构建与测试基线](p0009-cpu-cpp-build-baseline.md) | active | 构建契约已由 [D0005](decisions/d0005-cpu-build-toolchain.md) 接受；在 `p0009-cpu-cpp-build-baseline` 分支实现，尚无验收证据 |
 
 ## 数值开发入口与缺口
 
@@ -22,4 +22,4 @@
 ## 其他入口与缺口
 
 - 硬件支持与资质：[docs/HARDWARE.md](../docs/HARDWARE.md)、[D0004](decisions/d0004-gpu-p2p-support.md)。
-- CPU-only C++ 构建与测试基线由 [P0009](p0009-cpu-cpp-build-baseline.md) 拟定，尚未实现或验收，不替代生产 quant 或 CUDA 探针构建；bench 工作流仍待定，CI 未接线。硬件资格与性能阈值仍缺目标机证据。
+- CPU-only C++ 构建与测试基线由 [P0009](p0009-cpu-cpp-build-baseline.md) 实施中，尚未验收，不替代生产 quant 或 CUDA 探针构建；bench 工作流仍待定，CI 未接线。硬件资格与性能阈值仍缺目标机证据。
