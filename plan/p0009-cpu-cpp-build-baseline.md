@@ -5,7 +5,7 @@ status: active
 created: 2026-10-10
 updated: 2026-10-10
 knowledge: pending
-docs: []
+docs: [docs/BUILD.md]
 bench: []
 decisions: [D0001, D0005]
 followups: []
@@ -48,7 +48,7 @@ followups: []
 - 范围外：生产 quant/C++ 业务 API、通用 Tensor/graph、CUDA 版本矩阵及 sm80/sm120 策略、SIMD 分派或 native 优化、真实权重和 pack、依赖管理框架、安装导出/稳定 ABI、部署容器、全套 CI/bench/发布体系、性能基线和 P0005 目标机认证。以下在评审中移出本项：AddressSanitizer/UndefinedBehaviorSanitizer 检查配置、Python 调用 C++ 的执行器探针、版本信息的临时 Git 仓库状态矩阵（HEAD/VERSION 变化、暂存、未跟踪与忽略文件等组合）。未验证的扩展留待相应后续 P，不在本项提前占号。
 - 拟议顺序：长期选择已由 D0005 接受；先完成 CPU 构建及 smoke；接入统一测试与版本刷新；运行各配置及临时正反例；最后归档知识、人工评审和结项。
 - 后续 quant P 使用本项构建入口实现 scalar，并另行对照 `ref/` 验收；不因构建测试通过宣称 K-Q1～K-Q3 完成。P0005 仍需 CUDA 探针、目标机与实验前置，本项 CPU-only 交付不解除这些阻塞。必要构建知识缺失阻塞本项结项；明确范围外的未来工作不自动视为移交义务。
-- 知识拟归档到 `docs/BUILD.md`，只收当前真实构建契约、操作和支持证据，不重复量化规格或保存状态；长期选择的理由留 D，过程与验收指针留本项。该文件尚未创建，不在 front matter 填悬空路径。未来 docs/决策内容写入按规则确认；本项不修改 AGENTS.md，填充其构建路由另须用户明确授权。
+- 知识拟归档到 `docs/BUILD.md`，只收当前真实构建契约、操作和支持证据，不重复量化规格或保存状态；长期选择的理由留 D，过程与验收指针留本项。经用户确认已写入，README 路由同步增加构建入口。未来 docs/决策内容写入按规则确认；本项不修改 AGENTS.md，填充其构建路由另须用户明确授权。
 
 ### 设计记录
 

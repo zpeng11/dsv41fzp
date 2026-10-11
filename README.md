@@ -2,7 +2,7 @@
 
 DeepSeek-V4.1-Flash 单机柜推理引擎：单一模型特化，不追求通用架构，只把这一个模型在一种硬件形态（双路 CPU + 2/4 卡具备 GPU P2P 的单机柜，NVLink 非必选）上跑好。
 
-**路由**：模型事实 → [docs/MODEL.md](docs/MODEL.md)；目标硬件 → [docs/HARDWARE.md](docs/HARDWARE.md)；宪法与执法 → [AGENTS.md](AGENTS.md)（agent 每次会话必读：规则在宪法，知识在 `docs/`，状态在 `plan/`）；当前状态与文档进度 → [plan/STATUS.md](plan/STATUS.md)。
+**路由**：模型事实 → [docs/MODEL.md](docs/MODEL.md)；目标硬件 → [docs/HARDWARE.md](docs/HARDWARE.md)；构建与测试 → [docs/BUILD.md](docs/BUILD.md)；宪法与执法 → [AGENTS.md](AGENTS.md)（agent 每次会话必读：规则在宪法，知识在 `docs/`，状态在 `plan/`）；当前状态与文档进度 → [plan/STATUS.md](plan/STATUS.md)。
 
 ## 目录
 
