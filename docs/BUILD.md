@@ -1,8 +1,8 @@
 # BUILD.md — CPU-only 构建与测试契约
 
-本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md)，验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)；状态不在本页记录。
+本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md) 与 [P0010](../plan/p0010-quant-scalar-baseline.md)；状态不在本页记录。
 
-**来源标记**：**[D]** D0005 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
+**来源标记**：**[D]** D0005/D0007 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
 
 ## 1. 支持环境
 
@@ -43,6 +43,8 @@ ctest --preset cpu-debug
 
 Release 将三处 `cpu-debug` 换为 `cpu-release`。从其他目录运行测试用 `ctest --test-dir <repo>/build/<preset>`。[实测] 不启用 CUDA 语言，不需要 GPU、Torch/TileLang 或模型权重。[代码][实测]
 
+越界与未定义行为检查配置把三处换为 `cpu-asan`：Debug，`DF_SANITIZE=ON`、`DF_TEST_SCOPE=quant`，只构建 quant 生产库与测试执行器，只注册 quant C++ 测试与其编译选项检查。测试 preset 设 `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:exitcode=86` 与 `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`，任何 sanitizer 报告使对应测试失败。依赖 GCC 自带的 libasan/libubsan，实测于 §1 的 GCC 15.2.0；工具链缺这些库时构建失败，不 skip。临时注入的越界读被识别为 heap-buffer-overflow 并使 CTest 失败。[D][代码][实测]
+
 ## 4. target 契约
 
 选项按 target 施加，不经全局 `CMAKE_CXX_FLAGS`、`include_directories` 或全仓 `-march` 传递；`CMAKE_CXX_EXTENSIONS` 关闭。[D][代码]
@@ -52,6 +54,10 @@ Release 将三处 `cpu-debug` 换为 `cpu-release`。从其他目录运行测试
 | `df_cxx_baseline` | INTERFACE | C++20（`-std=c++20`，无 GNU 扩展），`-Wall -Wextra -Wpedantic`；不开 `-Werror`，不禁用 exceptions/RTTI |
 | `df_strict_fp` | INTERFACE | `-fno-fast-math -ffp-contract=off`；Debug 与 Release 均生效，数值 target 显式链接 |
 | `df_use_version_info(<target>)` | 函数 | 使 target 依赖版本刷新步骤并可包含 `df/version_info.h`；该头只应被单个 TU 包含 |
+| `df_sanitize` | INTERFACE | `DF_SANITIZE=ON` 时带 `-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer`（编译与链接），否则为空；只挂到 quant 生产库与执行器 |
+| `df_quant` | STATIC | 生产 quant 库（`src/quant`），公共头根为 `include/`，向消费者只传播 C++20；私有链接 `df_cxx_baseline`、`df_strict_fp`、`df_sanitize` |
+
+缓存变量 `DF_TEST_SCOPE` 取 `all`（默认）或 `quant`，其他值在 configure 时 FATAL_ERROR。[代码]
 
 ## 5. 数值前提
 
@@ -79,8 +85,13 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `bb.version` | 二进制报告的版本、SHA、dirty 与当前工作树一致 |
 | `bb.fp_env` | §5 运行时前提及其反例 |
 | `bb.contract.strict` / `bb.contract.fast_control` | 严格 target 不收缩；`-ffp-contract=fast` 对照版须收缩，证明探针敏感 |
-| `bb.compile_flags` | 从 `compile_commands.json` 验证严格选项只出现在应有的 target，全部 target 无 fast-math 与 `-march` |
+| `bb.compile_flags` | 从 `compile_commands.json` 验证严格选项只出现在应有的 target（含 `df_quant`，不含其执行器），全部 target 无 fast-math、`-march` 与 `-fsanitize` |
 | `quant.formats` | `tests/quant/test_formats.py` |
+| `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
+| `quant.codec.contract` | 每类输入拒绝、失败时输出不变、格式契约版本 |
+| `quant.codec.harness` | 执行器崩溃、退出、乱码、缺响应、缺执行器、协议错误与结果篡改均使驱动失败 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
+
+`cpu-asan` 只注册 `quant.codec.*` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）。`quant.codec.*` 经 `$<TARGET_FILE:df_quant_exec>` 定位执行器；该执行器与批量十六进制协议只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
 `bb.*` 工件只在 `tests/cpu/build_baseline/`，是构建基线的测试件，不是引擎模块。[代码] 仓库检查 `tools/check_repo.py` 仍按 AGENTS.md 工作流独立执行，不由 CTest 替代。

@@ -190,7 +190,15 @@ OPS = {
     "unpack_e2m1": (1, 1, "unpack"),
 }
 NON_GRID = (5, -5, 7, -7, 9, -9, 10, -10, 11, -11, 13, -13, 127, -127, -128)
-FORMAT_CONTRACT_VERSION = 1
+
+
+def archived_contract_version():
+    """The format contract version recorded in docs/QUANT.md §6."""
+    found = re.findall(r"^格式契约版本：(\d+)$", (ROOT / "docs" / "QUANT.md").read_text("utf-8"),
+                       re.MULTILINE)
+    if len(found) != 1:
+        raise HarnessError("docs/QUANT.md must record exactly one format contract version")
+    return int(found[0])
 
 
 def lengths(op, count):
@@ -232,7 +240,7 @@ def contract_cases():
     for value in NON_GRID:
         cases.append(rejected(f"grid_to_e2m1.non_grid_last.{value}", "grid_to_e2m1", (2, 4),
                               [2] * 7 + [value & 0xFF], 8))
-    cases.append(Case("version", "version", (1,), [], 1, 4, ("ok", [FORMAT_CONTRACT_VERSION])))
+    cases.append(Case("version", "version", (1,), [], 1, 4, ("ok", [archived_contract_version()])))
     return cases
 
 
