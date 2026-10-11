@@ -155,7 +155,7 @@ std::string run(const Request& req, Fn fn) {
   const std::vector<unsigned char> before(reinterpret_cast<unsigned char*>(out_ptr),
                                           reinterpret_cast<unsigned char*>(out_ptr) + out_bytes);
   const auto changed = [&] {
-    return std::memcmp(before.data(), out_ptr, out_bytes) != 0 ? "1" : "0";
+    return out_bytes != 0 && std::memcmp(before.data(), out_ptr, out_bytes) != 0 ? "1" : "0";
   };
 
   try {
