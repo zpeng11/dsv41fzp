@@ -1,11 +1,11 @@
 ---
 id: D0006
 title: 生产 quant scalar 接口采用连续视图、标准异常、调用时数值环境检查与 sanitizer 检查配置
-status: accepted
+status: superseded
 created: 2026-10-11
 updated: 2026-10-11
 replaces: []
-superseded-by: []
+superseded-by: [D0007]
 ---
 
 ## 背景与问题
