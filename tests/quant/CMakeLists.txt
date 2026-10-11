@@ -2,8 +2,14 @@
 
 add_executable(df_quant_exec quant_exec.cpp)
 target_link_libraries(df_quant_exec PRIVATE df_quant df_cxx_baseline df_sanitize)
+target_include_directories(df_quant_exec PRIVATE "${PROJECT_SOURCE_DIR}/src/quant")
 
 foreach(_suite IN ITEMS parity contract harness)
   df_add_python_test(quant.codec.${_suite} "${CMAKE_CURRENT_SOURCE_DIR}/test_codec_parity.py"
+    --exe "$<TARGET_FILE:df_quant_exec>" --suite ${_suite})
+endforeach()
+
+foreach(_suite IN ITEMS parity contract multiply harness)
+  df_add_python_test(quant.dequant.${_suite} "${CMAKE_CURRENT_SOURCE_DIR}/test_dequant_parity.py"
     --exe "$<TARGET_FILE:df_quant_exec>" --suite ${_suite})
 endforeach()
