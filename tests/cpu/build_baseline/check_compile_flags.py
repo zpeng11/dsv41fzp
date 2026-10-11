@@ -26,12 +26,12 @@ PROFILES = {
         "bb_fp_env": (["-std=c++20"] + STRICT, ["-mfma"]),
         "bb_contract_strict": (["-std=c++20", "-O2", "-mfma"] + STRICT, ["-ffp-contract=fast"]),
         "bb_contract_fast": (["-std=c++20", "-O2", "-mfma", "-ffp-contract=fast"], STRICT),
-        "df_quant": (["-std=c++20"] + STRICT, ["-mfma"]),
-        "df_quant_exec": (["-std=c++20"], STRICT + ["-mfma"]),
+        "df_quant": (["-std=c++20"] + STRICT, ["-mfma", "-fno-exceptions"]),
+        "df_quant_exec": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
     },
     "quant-sanitize": {
-        "df_quant": (["-std=c++20"] + STRICT + SANITIZE, ["-mfma"]),
-        "df_quant_exec": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma"]),
+        "df_quant": (["-std=c++20"] + STRICT + SANITIZE, ["-mfma", "-fno-exceptions"]),
+        "df_quant_exec": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
     },
 }
 
