@@ -10,6 +10,7 @@ patterns; NaN compares by class only. Any executor fault fails the run.
 
 import argparse
 import random
+import re
 import subprocess
 import sys
 import time
@@ -83,12 +84,10 @@ def parse_response(case, line):
     parts = line.split(" ")
     if parts[0] == "ok":
         values = parts[1:]
-        if len(values) != case.cap or any(len(v) != 2 * case.out_width for v in values):
+        token = re.compile(f"[0-9a-f]{{{2 * case.out_width}}}")
+        if len(values) != case.cap or not all(token.fullmatch(v) for v in values):
             raise HarnessError(f"{case.name}: malformed ok response")
-        try:
-            return ("ok", [int(v, 16) for v in values])
-        except ValueError as exc:
-            raise HarnessError(f"{case.name}: non-hex output") from exc
+        return ("ok", [int(v, 16) for v in values])
     if (parts[0] == "err" and len(parts) == 3
             and parts[1] in ("invalid_argument", "overflow_error")
             and parts[2] in ("changed=0", "changed=1")):
@@ -310,6 +309,16 @@ class Harness(unittest.TestCase):
         for case in (too_wide, unknown):
             with self.subTest(case=case.name), self.assertRaises(HarnessError):
                 failures(EXE, [case])
+
+    def test_malformed_tokens_are_protocol_errors(self):
+        fp32 = Case("fp32", "decode_e4m3fn", (1,), [0x7F], 1, 4, ("ok", [0x7FC00000]), FP32)
+        bf16 = Case("bf16", "fp32_to_bf16", (1,), [0x7FC00000], 1, 2, ("ok", [0x7FC0]), BF16)
+        for case, tokens in ((fp32, ("-0000001", "+0000001", "0x000001", "0000_001",
+                                     "7FC00000", "7fc0000", "7fc000000")),
+                             (bf16, ("-001", "+001", "0x01", "0_01", "7FC0", "7fc", "7fc00"))):
+            for token in tokens:
+                with self.subTest(case=case.name, token=token), self.assertRaises(HarnessError):
+                    parse_response(case, "ok " + token)
 
     def test_failures_reach_process_exit(self):
         for suite, fault in (("parity", "mismatch"), ("contract", "crash")):
