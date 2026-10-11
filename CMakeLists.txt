@@ -13,5 +13,7 @@ include(DfVersion)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+add_subdirectory(src/quant)
+
 enable_testing()
 add_subdirectory(tests)

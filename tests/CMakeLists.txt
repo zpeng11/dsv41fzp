@@ -6,6 +6,7 @@ function(df_add_python_test name script)
 endfunction()
 
 add_subdirectory(cpu/build_baseline)
+add_subdirectory(quant)
 
 df_add_python_test(quant.formats "${PROJECT_SOURCE_DIR}/tests/quant/test_formats.py")
 df_add_python_test(tools.check_repo "${PROJECT_SOURCE_DIR}/tests/tools/test_check_repo.py")
