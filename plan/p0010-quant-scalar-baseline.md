@@ -68,6 +68,24 @@ followups: []
 - 2026-10-11：评审继续收紧 D0006：校验分为读数据前的元数据校验与写输出前的内容校验；改正次正规数举例；环境检查改以 MXCSR 完整控制字段为准。用户接受 D0006。MODEL.md 中“与官方 convert.py 逐位一致”未注明码点 8 例外、§4 断言 kernel parity 只对照 quant，经用户同意改为单独的 docs 修订，不再作为本项知识条目；计算类上一级参照的完整链条修订留待首个计算类 kernel 工作项。本项仍为 draft，待授权开工。
 - 2026-10-11：经用户同意，以 D0007 取代 D0006：反量化也改用整数位运算，取消调用时 MXCSR 检查，失败类别由三类减为两类（去掉 `std::runtime_error`）。本项的 codec、环境无关性与 `cpu-asan` 要求不变，只回填决策引用与异常类别数。仍为 draft。
 - 2026-10-11：用户授权开工；P0010 翻转为 active，实现走 `p0010-quant-scalar-baseline` 分支，接口与环境契约以 D0007 为准。
+- 2026-10-11：用户同意实现拆解：`decode_e2m1` 接受每字节一个 nibble；输出容量可大于所需、只写前缀；格式契约版本初值 1；执行器故障传播改为永久的 `quant.codec.harness` 测试，四类数值错误与越界读仍临时注入。根 CMake 接线因须指向已存在的目录，并入首个端到端提交，不单独提交。
+
+### 验收证据（待用户评审）
+
+环境：Intel Xeon Platinum 8350C 双路，Ubuntu 26.04 LTS，Linux 5.15.0-72-generic x86_64；`g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0`；CMake/CTest 4.4.4、Ninja 1.13.2（pip，`/root/miniforge`）；Python 3.12.8；Git 2.54.0。工作仓库与全新本地克隆的实现提交均为分支上的 `9201b8a`。
+
+- 构建与测试：`cpu-debug`、`cpu-release` 各 11/11 通过，`cpu-asan` 4/4 通过（`quant.compile_flags`、`quant.codec.parity`、`quant.codec.contract`、`quant.codec.harness`），三者构建零告警；从 `/tmp` 用 `ctest --test-dir` 运行 `cpu-release` 11/11；全新本地克隆三个 preset 结果相同。普通构建与测试离线，无第三方测试框架，不写 `tests/data/`。
+- 模块边界：`df_quant` 静态库只依赖标准库；`df_quant_exec` 只链接该库，不编译生产 `.cpp`。`quant.codec.*` 经 `$<TARGET_FILE:df_quant_exec>` 与 configure 时的解释器路径运行。
+- parity 范围：E2M1 16 码点、E4M3FN 与 E8M0 各 256 编码、BF16 全部 65,536 位模式、全部 256 个 packed byte 的打包与展开、多行打包、整数格 15 个合法格点双向；FP32→BF16 覆盖全部有限相邻 BF16 格点中点及其 FP32 两侧邻值（195,840 个）、18 个特殊值与 20,000 个固定种子随机值。输出缓冲区额外 3 个元素，确认前缀之后未被写入。
+- 环境无关性：默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位一致；每次运行先由执行器回报 MXCSR，驱动核对舍入、FTZ、DAZ 位已生效，执行器退出前确认控制位未变。
+- 失败契约：9 个入口各覆盖 rank 0、输入过短/过长、输出容量不足、元素数溢出（两维与三维）、输入输出重叠、4 种零元素 shape（含 `(2^63, 2^63, 0)`，按乘积为 0 接受）；打包入口另测奇数最后维。元数据错误均给出短于声明的数据缓冲区，在 `cpu-asan` 下无 sanitizer 报告。非法 nibble（`0x10`、`0xFF`）与 15 个代表性非格点放在最后一个元素，执行器比对确认输出缓冲区未变，且 `ref/` 对相同输入同样拒绝。格式契约版本读到 1。
+- 编译选项：`bb.compile_flags`（Debug/Release）确认 `df_quant` 带 `-fno-fast-math -ffp-contract=off`，`df_quant_exec` 不带，全部 target 无 `-fsanitize`、fast-math 与 `-march`；`quant.compile_flags`（`cpu-asan`）确认两者均带 D0007 的 sanitizer 选项。
+- 耗时：Debug 下 262,144 元素单请求，`ref/` 期望值生成 0.27s、执行与比较 0.22s；全量 parity 每种环境约 0.23s（Debug）、0.6s（`cpu-asan`）。
+- 故障传播（永久测试 `quant.codec.harness`）：执行器崩溃、提前退出、输出乱码、少一条响应、缺执行器、token 超出元素宽度、未知操作均使驱动报 `HarnessError`；结果被篡改时比较失败；parity 与 contract 套件在故障注入下进程非零退出。
+- 敏感性（临时注入，已恢复，源码逐字节还原）：nibble 次序互换、BF16 中点改为向上取整、E2M1 负零改为正零、E8M0 `0x00` 解码为零，`quant.codec.parity` 均失败（CTest 退出码 8），分别定位到 `pack.all_bytes[1]`、`fp32_to_bf16.rounding[1]`、`e2m1.all[8]`、`e8m0.all[0]`。在 `decode_e4m3fn` 入口注入读取越界一个元素，`cpu-asan` 报 heap-buffer-overflow，parity 与 contract 失败。
+- 开发中发现：首次 `cpu-asan` 运行由 UBSan 报出执行器在零字节输出时向 `memcmp` 传空指针，已在 `ci` 提交中修复；生产库无报告。
+- 治理：`python3 tests/quant/test_formats.py`、`python3 tests/tools/test_check_repo.py` 通过；`python3 tools/check_repo.py --audit --range main..HEAD --strict` 为 E=0 W=0 I=0；`git diff --check main..HEAD` 无输出。
+- 未完成：知识归档（`docs/QUANT.md`、`docs/BUILD.md`）待用户确认正文；用户评审。
 
 ## 收尾
 
