@@ -19,11 +19,22 @@
       "inherits": "cpu-base",
       "displayName": "CPU Release",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "cpu-asan",
+      "inherits": "cpu-base",
+      "displayName": "CPU Debug, ASan+UBSan, quant only",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "DF_SANITIZE": "ON",
+        "DF_TEST_SCOPE": "quant"
+      }
     }
   ],
   "buildPresets": [
     { "name": "cpu-debug", "configurePreset": "cpu-debug" },
-    { "name": "cpu-release", "configurePreset": "cpu-release" }
+    { "name": "cpu-release", "configurePreset": "cpu-release" },
+    { "name": "cpu-asan", "configurePreset": "cpu-asan" }
   ],
   "testPresets": [
     {
@@ -33,6 +44,15 @@
       "execution": { "noTestsAction": "error", "stopOnFailure": false }
     },
     { "name": "cpu-debug", "inherits": "cpu-base", "configurePreset": "cpu-debug" },
-    { "name": "cpu-release", "inherits": "cpu-base", "configurePreset": "cpu-release" }
+    { "name": "cpu-release", "inherits": "cpu-base", "configurePreset": "cpu-release" },
+    {
+      "name": "cpu-asan",
+      "inherits": "cpu-base",
+      "configurePreset": "cpu-asan",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1:exitcode=86",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    }
   ]
 }

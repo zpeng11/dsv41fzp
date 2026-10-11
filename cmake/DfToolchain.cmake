@@ -2,7 +2,8 @@
 #
 # df_cxx_baseline: C++20 without compiler extensions, common warnings.
 # df_strict_fp:    numeric baseline; no fast-math, no FP contraction.
-# Neither is applied globally; targets opt in via target_link_libraries.
+# df_sanitize:     ASan/UBSan when DF_SANITIZE is ON (cpu-asan preset, D0007); empty otherwise.
+# None is applied globally; targets opt in via target_link_libraries.
 
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   message(FATAL_ERROR "Unsupported C++ compiler '${CMAKE_CXX_COMPILER_ID}'; only GCC is supported (D0005).")
@@ -35,3 +36,17 @@ target_compile_options(df_cxx_baseline INTERFACE -Wall -Wextra -Wpedantic)
 
 add_library(df_strict_fp INTERFACE)
 target_compile_options(df_strict_fp INTERFACE -fno-fast-math -ffp-contract=off)
+
+option(DF_SANITIZE "Instrument opted-in targets with ASan and UBSan" OFF)
+add_library(df_sanitize INTERFACE)
+if(DF_SANITIZE)
+  set(_df_sanitize_flags -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+  target_compile_options(df_sanitize INTERFACE ${_df_sanitize_flags})
+  target_link_options(df_sanitize INTERFACE ${_df_sanitize_flags})
+endif()
+
+set(DF_TEST_SCOPE "all" CACHE STRING "Test subtrees to build: all, or quant only")
+set_property(CACHE DF_TEST_SCOPE PROPERTY STRINGS all quant)
+if(NOT DF_TEST_SCOPE MATCHES "^(all|quant)$")
+  message(FATAL_ERROR "DF_TEST_SCOPE must be 'all' or 'quant', got '${DF_TEST_SCOPE}'.")
+endif()

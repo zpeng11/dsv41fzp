@@ -1,6 +1,6 @@
 # QUANT.md — 格式 oracle 数值契约
 
-模型用途、分组大小与官方路径以 [MODEL.md](MODEL.md#2-结构与格式) 为模型事实源。本页归档 P0006 首块 `ref/` 格式 oracle 的位表示、异常契约和验证边界，不建立第二个生产格式配置中心；生产量化真源仍为 `src/quant`。
+模型用途、分组大小与官方路径以 [MODEL.md](MODEL.md#2-结构与格式) 为模型事实源。本页归档 P0006 首块 `ref/` 格式 oracle 的位表示、异常契约和验证边界，以及 P0010 生产 C++ codec 的接口、失败与环境契约（§6），不建立第二个生产格式配置中心；生产量化真源为 `src/quant`。
 
 ## 1. 来源与验证方法
 
@@ -10,6 +10,7 @@
 - **[PTX]** [NVIDIA PTX ISA](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html)：§5.2.3 替代浮点格式、§6.5.2 rounding、§9.7.3 subnormal/`.ftz`；仅用作浮点契约依据，不当作本机 GPU parity 证据。
 - **[代码]** 官方模型只读镜像的 commit 与来源见 [PROVENANCE](../third_party/reference/PROVENANCE.md)。上述格式定义补足官方实现仅通过 dtype 指定、未自行定义的编码语义。
 - **[参照]** 本仓 [ref/formats.py](../ref/formats.py)、[ref/dequant.py](../ref/dequant.py)；**[测试]** [tests/quant/test_formats.py](../tests/quant/test_formats.py)。
+- **[C++]** 本仓 [include/df/quant/codec.h](../include/df/quant/codec.h)、[src/quant/](../src/quant/)；**[C++测试]** [tests/quant/test_codec_parity.py](../tests/quant/test_codec_parity.py) 经测试执行器 [quant_exec.cpp](../tests/quant/quant_exec.cpp) 调用生产库。
 
 本页编码数字是规格值，不是吞吐或性能测量。验证环境为 Python 3.12.8（conda-forge，GCC 13.3.0）、Linux 5.15.0-72-generic x86_64 / glibc 2.43、Intel Xeon Platinum 8350C；依赖仅标准库，不依赖 NumPy、Torch、GPU 或模型权重。方法为整数位域解码、整数有效数乘法与显式 RNE；独立测试用 `Fraction` 位域定义和相邻格点距离比较。验收命令与证据保留在 [P0006](../plan/p0006-ref-format-oracle.md#收尾)。
 
@@ -59,3 +60,23 @@ E2M1 整数格为解码值乘二的精确整数。正负零都变成整数零，
 官方落点需按路径区分：Engram `model.py:319–320`、转换器 `convert.py:157–173` 的 wo_a 路径有明确 BF16 落点；KV/SWA 的 inplace 量化回写输入 dtype（`kernel.py:82–86,167–172`）；专家 `kernel.py:538–553` 是 FP4→FP32→FP8 后 GEMM，再对累加值应用 scale。[代码] 不能从逐元素反量化验收推出移动 scale、提前 BF16 舍入或整数点积改写的等价性。
 
 本 oracle 不证明有损量化、scale 生成、动态 KV 量化、GPU cast/FTZ、kernel parity、checkpoint 转换或端到端模型一致，也不替代 `src/quant` 或 K-Q1～K-Q3 的引擎实现验收。验证链路由见 [MODEL §4](MODEL.md#4-精确性链条)。
+
+## 6. 生产 C++ codec（`src/quant`）
+
+选择理由见 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)，验收证据见 [P0010](../plan/p0010-quant-scalar-baseline.md)。
+
+**入口**：`df::quant` 命名空间，公共头 `include/df/quant/codec.h`。`decode_e2m1`、`decode_e4m3fn`、`decode_e8m0`、`decode_bf16` 输出 FP32 位模式（`uint32_t`）；`fp32_to_bf16` 输出 BF16 位模式（`uint16_t`）；`pack_e2m1` / `unpack_e2m1` 在每字节一个 nibble 与打包字节之间转换；`e2m1_to_grid` / `grid_to_e2m1` 在 nibble 与 `int8_t` 整数格之间转换。位模式、零符号、打包次序与 §2～§3 的 `ref/` 契约逐位相同，含码点 8 解码为负零。[C++][C++测试]
+
+**输入输出**：连续 row-major 只读视图、显式 shape（`std::span<const std::size_t>`）与调用方提供的输出缓冲区，不支持 stride、广播或所有权。输入长度须与 shape 精确匹配；输出容量不小于结果长度即可，只写结果前缀。shape 至少一维；任一维为 0 时元素数为 0，其余维不参与溢出判定。打包入口的 shape 是逻辑 nibble shape。[C++]
+
+**失败**：rank 0、长度与 shape 不匹配、输出容量不足、打包入口的奇数最后维、输入输出重叠、非法 nibble（>15）、非格点整数抛 `std::invalid_argument`；元素数超出 `size_t` 抛 `std::overflow_error`。元数据校验在读取任何数据前完成，内容校验在写入任何输出前完成，失败时输出不变。重叠只按实际读写的区间判定，空区间不算重叠。[C++][C++测试]
+
+**静态类型排除**（无运行时检查）：负维度（`size_t`）、bool 或浮点充当整数、超出 `uint8_t`/`uint16_t`/`uint32_t` 宽度的位模式。对应 `ref/` 的 `TypeError` 与位宽 `ValueError` 在 C++ 中不可表达；测试执行器在窄化前检查 token 宽度，超宽按执行器故障处理，不计为库的拒绝。[C++][C++测试]
+
+**环境无关性**：全部入口以定宽整数位运算构造结果，数值路径不执行浮点运算，不读取也不修改浮点环境。parity 在默认、MXCSR 向上舍入、FTZ、DAZ 四种调用环境下均与 `ref/` 逐位一致（环境同 [BUILD §1](BUILD.md#1-支持环境)）。[C++测试]
+
+**格式契约版本**：`format_contract_version()` 返回 `src/quant/contract.h` 中的常量，与引擎 `VERSION` 独立。任一位模式、零符号、打包次序或失败契约变化时递增。当前值：
+
+格式契约版本：1
+
+**验证边界**：parity 由 [C++测试] 覆盖 §5 所列码点穷举、全部 BF16 相邻格点中点及其两侧邻值，以及每类拒绝。它对应 K-Q1（codec、布局与整数格）以及 K-Q3 中的 E4M3FN/BF16 解码与 FP32→BF16 舍入；不覆盖给定 scale 的反量化（P0011）、BF16→E4M3 编码、点积 scale 折叠或任何 SIMD/CUDA 路径。
