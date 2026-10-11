@@ -142,7 +142,7 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
 
 | 编号 | 内容 | parity 参照 |
 | --- | --- | --- |
-| K-Q1 | E2M1 ⇄ int8 整数格（LUT、nibble 打包/展开，沿 K 每字节 2 值） | `ref/`（与官方 convert.py 逐位一致） |
+| K-Q1 | E2M1 ⇄ int8 整数格（LUT、nibble 打包/展开，沿 K 每字节 2 值） | `ref/`（与官方 convert.py 逐位一致，E2M1 码点 8 除外：本仓解码为负零，官方 FP4_TABLE 为正零，见 [QUANT §2](QUANT.md#2-位模式与零符号)） |
 | K-Q2 | UE8M0 / E8M0 指数应用与折叠 | 同上 |
 | K-Q3 | E4M3 ⇄ BF16；KV 双 scale 变体（主 KV E4M3/16、索引 K UE8M0/32、SWA FP8/32） | 同上 |
 
@@ -210,8 +210,8 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
 ```
 官方参考实现 `third_party/reference/inference/`（torch+tilelang，贪心逐 token 一致自证）
   └─ ref/  Python FP32 oracle（精确 MX 反量化，语义镜像 model.py）
-       └─ src/quant/  C++ scalar 编解码（与 ref/ 及官方 convert.py 逐位一致）
-            └─ 各 kernel parity（只对照 quant 已验证 scalar 路径）
+       └─ src/quant/  C++ scalar 编解码（与 ref/ 逐位一致；与官方 convert.py 除 E2M1 码点 8 的零符号外逐位一致）
+            └─ 各 kernel parity（只对照验证链上一级已验证的 scalar 路径；格式与解码类对照 src/quant，计算类的上一级参照须另行建立）
                  └─ 双 arch 顶层锁：sm80 与 sm120 端到端贪心逐 token 一致（冻结 prompt 集）
 ```
 
