@@ -1,5 +1,7 @@
 #include "df/quant/codec.h"
 
+#include "contract.h"
+
 #include <bit>
 #include <cstdint>
 #include <limits>
@@ -155,6 +157,8 @@ std::uint32_t e4m3fn_bits(std::uint8_t code) {
 }
 
 }  // namespace
+
+std::uint32_t format_contract_version() noexcept { return kFormatContractVersion; }
 
 void decode_e2m1(std::span<const std::uint8_t> nibbles, Shape shape, std::span<std::uint32_t> out) {
   const std::size_t count = check_elementwise(nibbles, shape, out);

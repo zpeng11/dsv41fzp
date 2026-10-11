@@ -178,6 +178,11 @@ std::string dispatch(const Request& req) {
   using u16 = std::uint16_t;
   using u32 = std::uint32_t;
   using i8 = std::int8_t;
+  if (req.op == "version") {
+    std::string response = "ok";
+    append_hex(response, q::format_contract_version());
+    return response;
+  }
   if (req.op == "decode_e2m1") return run<u8, u32>(req, q::decode_e2m1);
   if (req.op == "decode_e4m3fn") return run<u8, u32>(req, q::decode_e4m3fn);
   if (req.op == "decode_e8m0") return run<u8, u32>(req, q::decode_e8m0);

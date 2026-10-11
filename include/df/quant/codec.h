@@ -20,6 +20,9 @@ namespace df::quant {
 
 using Shape = std::span<const std::size_t>;
 
+// Quantization format contract version; independent of the engine version.
+std::uint32_t format_contract_version() noexcept;
+
 // E2M1 nibbles (one per byte, 0..15) to FP32 bit patterns; code 8 decodes to -0.
 void decode_e2m1(std::span<const std::uint8_t> nibbles, Shape shape, std::span<std::uint32_t> out);
 

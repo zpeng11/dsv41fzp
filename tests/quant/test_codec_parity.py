@@ -178,6 +178,65 @@ def parity_cases():
     ]
 
 
+# op -> (input width, output width, packing direction or None)
+OPS = {
+    "decode_e2m1": (1, 4, None),
+    "decode_e4m3fn": (1, 4, None),
+    "decode_e8m0": (1, 4, None),
+    "decode_bf16": (2, 4, None),
+    "fp32_to_bf16": (4, 2, None),
+    "e2m1_to_grid": (1, 1, None),
+    "grid_to_e2m1": (1, 1, None),
+    "pack_e2m1": (1, 1, "pack"),
+    "unpack_e2m1": (1, 1, "unpack"),
+}
+NON_GRID = (5, -5, 7, -7, 9, -9, 10, -10, 11, -11, 13, -13, 127, -127, -128)
+FORMAT_CONTRACT_VERSION = 1
+
+
+def lengths(op, count):
+    """Input length and output need for a valid request with `count` logical elements."""
+    packing = OPS[op][2]
+    if packing == "pack":
+        return count, count // 2
+    if packing == "unpack":
+        return count // 2, count
+    return count, count
+
+
+def rejected(name, op, shape, tokens, cap, kind="invalid_argument", alias=False):
+    return Case(name, op, shape, list(tokens), cap, OPS[op][1], ("err", kind), alias=alias)
+
+
+def contract_cases():
+    """Every rejection class per op; metadata errors use buffers shorter than declared."""
+    cases = []
+    for op in OPS:
+        n_in, n_out = lengths(op, 8)
+        cases += [
+            rejected(f"{op}.rank0", op, (), [], 4),
+            rejected(f"{op}.short_input", op, (2, 4), [0] * (n_in - 1), n_out),
+            rejected(f"{op}.long_input", op, (2, 4), [0] * (n_in + 1), n_out),
+            rejected(f"{op}.short_output", op, (2, 4), [0] * n_in, n_out - 1),
+            rejected(f"{op}.overflow", op, (1 << 32, 1 << 32), [], 0, "overflow_error"),
+            rejected(f"{op}.overflow_3d", op, (1 << 21, 1 << 21, 1 << 22), [], 0, "overflow_error"),
+            rejected(f"{op}.alias", op, (2, 4), [0] * n_in, n_out, alias=True),
+        ]
+        for shape in ((0,), (3, 0), (0, 4), (1 << 63, 1 << 63, 0)):
+            cases.append(Case(f"{op}.empty{shape}", op, shape, [], 2, OPS[op][1], ("ok", [])))
+        if OPS[op][2]:
+            n_in, n_out = lengths(op, 6)
+            cases.append(rejected(f"{op}.odd_last_dim", op, (2, 3), [0] * (n_in - 1), n_out))
+    for op in ("decode_e2m1", "e2m1_to_grid", "pack_e2m1"):
+        for bad in (0x10, 0xFF):
+            cases.append(rejected(f"{op}.bad_nibble_last.{bad:#x}", op, (2, 4), [1] * 7 + [bad], 8))
+    for value in NON_GRID:
+        cases.append(rejected(f"grid_to_e2m1.non_grid_last.{value}", "grid_to_e2m1", (2, 4),
+                              [2] * 7 + [value & 0xFF], 8))
+    cases.append(Case("version", "version", (1,), [], 1, 4, ("ok", [FORMAT_CONTRACT_VERSION])))
+    return cases
+
+
 def failures(exe, cases, args=()):
     responses = run_executor(exe, cases, args)
     return [msg for case, resp in zip(cases, responses) if (msg := check(case, resp))]
@@ -192,7 +251,24 @@ class Parity(unittest.TestCase):
               file=sys.stderr)
 
 
-SUITES = {"parity": Parity}
+class Contract(unittest.TestCase):
+    def test_rejections_and_version(self):
+        self.assertEqual(failures(EXE, contract_cases()), [])
+
+    def test_oracle_agrees_on_non_grid_and_bad_nibbles(self):
+        for value in NON_GRID:
+            with self.assertRaises(ValueError):
+                f.grid_to_e2m1(value)
+        for bad in (0x10, 0xFF):
+            with self.assertRaises(ValueError):
+                f.decode_e2m1(bad)
+            with self.assertRaises(ValueError):
+                f.pack_e2m1([0, bad], (2,))
+        with self.assertRaises(ValueError):
+            f.pack_e2m1([0] * 6, (2, 3))
+
+
+SUITES = {"parity": Parity, "contract": Contract}
 
 
 def main():
