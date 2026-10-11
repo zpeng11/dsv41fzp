@@ -9,6 +9,7 @@ patterns; NaN compares by class only. Any executor fault fails the run.
 """
 
 import argparse
+import random
 import subprocess
 import sys
 import time
@@ -122,11 +123,58 @@ def elementwise(name, op, shape, tokens, expected, out_width, kind, slack=3):
                 ("ok", list(expected)), kind)
 
 
+def decoded(fn, codes):
+    return [f.fp32_bits(fn(c)) for c in codes]
+
+
+def bf16_rounding_inputs():
+    """Midpoints of every adjacent finite BF16 pair and their FP32 neighbors, plus specials."""
+    values = []
+    for sign in (0, 0x80000000):
+        for b in range(0x7F80):
+            mid = sign | (b << 16) | 0x8000
+            values += [mid - 1, mid, mid + 1]
+    values += [
+        0x00000000, 0x80000000, 0x00000001, 0x80000001, 0x007FFFFF, 0x807FFFFF,
+        0x00800000, 0x0080FFFF, 0x7F7FFFFF, 0xFF7FFFFF, 0x7F7F7FFF, 0x7F800000,
+        0xFF800000, 0x7F800001, 0x7FC00000, 0x7FFFFFFF, 0xFF800001, 0xFFFFFFFF,
+    ]
+    rng = random.Random(10)
+    values += [rng.getrandbits(32) for _ in range(20000)]
+    return values
+
+
 def parity_cases():
-    e4m3 = range(256)
+    nibbles = range(16)
+    bytes_ = range(256)
+    bf16 = range(1 << 16)
+    rounding = bf16_rounding_inputs()
+    byte_nibbles = [n for b in bytes_ for n in (b & 15, b >> 4)]
+    rng = random.Random(11)
+    rows = [rng.randrange(16) for _ in range(3 * 2 * 6)]
+    grid_points = sorted({f.e2m1_to_grid(c) for c in nibbles})
     return [
-        elementwise("e4m3fn.all", "decode_e4m3fn", (16, 16), e4m3,
-                    [f.fp32_bits(f.decode_e4m3fn(c)) for c in e4m3], 4, FP32),
+        elementwise("e2m1.all", "decode_e2m1", (4, 4), nibbles,
+                    decoded(f.decode_e2m1, nibbles), 4, FP32),
+        elementwise("e4m3fn.all", "decode_e4m3fn", (16, 16), bytes_,
+                    decoded(f.decode_e4m3fn, bytes_), 4, FP32),
+        elementwise("e8m0.all", "decode_e8m0", (256,), bytes_,
+                    decoded(f.decode_e8m0, bytes_), 4, FP32),
+        elementwise("bf16.all", "decode_bf16", (256, 256), bf16,
+                    decoded(f.decode_bf16, bf16), 4, FP32),
+        elementwise("fp32_to_bf16.rounding", "fp32_to_bf16", (len(rounding),), rounding,
+                    [f.fp32_bits_to_bf16(b) for b in rounding], 2, BF16),
+        elementwise("pack.all_bytes", "pack_e2m1", (4, 128), byte_nibbles,
+                    f.pack_e2m1(byte_nibbles, (4, 128)), 1, RAW),
+        elementwise("unpack.all_bytes", "unpack_e2m1", (4, 128), bytes_,
+                    f.unpack_e2m1(bytes(bytes_), (4, 128)), 1, RAW),
+        elementwise("pack.rows", "pack_e2m1", (3, 2, 6), rows,
+                    f.pack_e2m1(rows, (3, 2, 6)), 1, RAW),
+        elementwise("grid.from_e2m1", "e2m1_to_grid", (16,), nibbles,
+                    [f.e2m1_to_grid(c) & 0xFF for c in nibbles], 1, RAW),
+        elementwise("grid.to_e2m1", "grid_to_e2m1", (len(grid_points),),
+                    [v & 0xFF for v in grid_points],
+                    [f.grid_to_e2m1(v) for v in grid_points], 1, RAW),
     ]
 
 

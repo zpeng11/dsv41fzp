@@ -174,7 +174,19 @@ std::string run(const Request& req, Fn fn) {
 
 std::string dispatch(const Request& req) {
   namespace q = df::quant;
-  if (req.op == "decode_e4m3fn") return run<std::uint8_t, std::uint32_t>(req, q::decode_e4m3fn);
+  using u8 = std::uint8_t;
+  using u16 = std::uint16_t;
+  using u32 = std::uint32_t;
+  using i8 = std::int8_t;
+  if (req.op == "decode_e2m1") return run<u8, u32>(req, q::decode_e2m1);
+  if (req.op == "decode_e4m3fn") return run<u8, u32>(req, q::decode_e4m3fn);
+  if (req.op == "decode_e8m0") return run<u8, u32>(req, q::decode_e8m0);
+  if (req.op == "decode_bf16") return run<u16, u32>(req, q::decode_bf16);
+  if (req.op == "fp32_to_bf16") return run<u32, u16>(req, q::fp32_to_bf16);
+  if (req.op == "pack_e2m1") return run<u8, u8>(req, q::pack_e2m1);
+  if (req.op == "unpack_e2m1") return run<u8, u8>(req, q::unpack_e2m1);
+  if (req.op == "e2m1_to_grid") return run<u8, i8>(req, q::e2m1_to_grid);
+  if (req.op == "grid_to_e2m1") return run<i8, u8>(req, q::grid_to_e2m1);
   die("unknown op '" + req.op + "'");
 }
 
