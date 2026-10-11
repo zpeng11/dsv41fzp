@@ -1,0 +1,38 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "cpu-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "cpu-debug",
+      "inherits": "cpu-base",
+      "displayName": "CPU Debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "cpu-release",
+      "inherits": "cpu-base",
+      "displayName": "CPU Release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "cpu-debug", "configurePreset": "cpu-debug" },
+    { "name": "cpu-release", "configurePreset": "cpu-release" }
+  ],
+  "testPresets": [
+    {
+      "name": "cpu-base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    { "name": "cpu-debug", "inherits": "cpu-base", "configurePreset": "cpu-debug" },
+    { "name": "cpu-release", "inherits": "cpu-base", "configurePreset": "cpu-release" }
+  ]
+}
