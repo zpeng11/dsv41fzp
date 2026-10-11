@@ -1,6 +1,6 @@
 # BUILD.md — CPU-only 构建与测试契约
 
-本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md) 与 [P0010](../plan/p0010-quant-scalar-baseline.md)；状态不在本页记录。
+本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)、[P0010](../plan/p0010-quant-scalar-baseline.md) 与 [P0011](../plan/p0011-quant-dequant-scalar.md)；状态不在本页记录。
 
 **来源标记**：**[D]** D0005/D0007 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
 
@@ -90,8 +90,14 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
 | `quant.codec.contract` | 每类输入拒绝、失败时输出不变、格式契约版本 |
 | `quant.codec.harness` | 执行器崩溃、退出、乱码、缺响应、缺执行器、协议错误与结果篡改均使驱动失败 |
+| `quant.dequant.parity` | 六类给定 scale 反量化、两种输出、合法编码组合和布局边界，在八种 MXCSR 下对照 `ref/dequant.py` |
+| `quant.dequant.contract` | 数据与 scale 的元数据/内容拒绝、两类重叠、失败时输出不变和零元素 |
+| `quant.dequant.multiply` | 同一个生产有限 FP32 整数乘法 helper 的私有连接，定向 RNE 边界与固定种子补充，在八种 MXCSR 下对照 `ref/formats.py` |
+| `quant.dequant.harness` | 新协议、私有探针坏请求、执行器及结果故障均传播到进程退出 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
 
-`cpu-asan` 只注册 `quant.codec.*` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）。`quant.codec.*` 经 `$<TARGET_FILE:df_quant_exec>` 定位执行器；该执行器与批量十六进制协议只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
+`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）。两类 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器；私有乘法探针直接调用库中同一个 helper，不将通用乘法加入公共 API。该执行器与携带数据/scale shape 及两份原始编码的批量十六进制协议只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
+
+反量化与私有乘法测试覆盖默认、向上、向下、向零、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码；执行器回报设置，并在每次生产调用前后核对完整 MXCSR，包含异常路径，stdio 在核对窗口外。量化格式、数值与验证边界见 [QUANT §7](QUANT.md#7-给定-scale-的生产-scalar-反量化)。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
 
 `bb.*` 工件只在 `tests/cpu/build_baseline/`，是构建基线的测试件，不是引擎模块。[代码] 仓库检查 `tools/check_repo.py` 仍按 AGENTS.md 工作流独立执行，不由 CTest 替代。

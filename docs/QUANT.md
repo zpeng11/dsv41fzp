@@ -1,6 +1,6 @@
 # QUANT.md — 格式 oracle 数值契约
 
-模型用途、分组大小与官方路径以 [MODEL.md](MODEL.md#2-结构与格式) 为模型事实源。本页归档 P0006 首块 `ref/` 格式 oracle 的位表示、异常契约和验证边界，以及 P0010 生产 C++ codec 的接口、失败与环境契约（§6），不建立第二个生产格式配置中心；生产量化真源为 `src/quant`。
+模型用途、分组大小与官方路径以 [MODEL.md](MODEL.md#2-结构与格式) 为模型事实源。本页归档 P0006 首块 `ref/` 格式 oracle 的位表示、异常契约和验证边界，以及 P0010 生产 C++ codec（§6）与 P0011 给定 scale 反量化（§7）的接口、失败与环境契约，不建立第二个生产格式配置中心；生产量化真源为 `src/quant`。
 
 ## 1. 来源与验证方法
 
@@ -79,4 +79,22 @@ E2M1 整数格为解码值乘二的精确整数。正负零都变成整数零，
 
 格式契约版本：1
 
-**验证边界**：parity 由 [C++测试] 覆盖 §5 所列码点穷举、全部 BF16 相邻格点中点及其两侧邻值，以及每类拒绝。它对应 K-Q1（codec、布局与整数格）以及 K-Q3 中的 E4M3FN/BF16 解码与 FP32→BF16 舍入；不覆盖给定 scale 的反量化（P0011）、BF16→E4M3 编码、点积 scale 折叠或任何 SIMD/CUDA 路径。
+**验证边界**：parity 由 [C++测试] 覆盖 §5 所列码点穷举、全部 BF16 相邻格点中点及其两侧邻值，以及每类拒绝。它对应 K-Q1（codec、布局与整数格）以及 K-Q3 中的 E4M3FN/BF16 解码与 FP32→BF16 舍入；给定 scale 的反量化由 §7 单独验证，codec parity 不代替乘 scale parity，也不覆盖 BF16→E4M3 编码、点积 scale 折叠或任何 SIMD/CUDA 路径。
+
+## 7. 给定 scale 的生产 scalar 反量化
+
+选择理由见 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)，验收证据见 [P0011](../plan/p0011-quant-dequant-scalar.md)。以下 **[C++反量化]** 指 [dequant.h](../include/df/quant/dequant.h) 与 [dequant.cpp](../src/quant/dequant.cpp)，**[反量化测试]** 指 [test_dequant_parity.py](../tests/quant/test_dequant_parity.py) 经同一个测试执行器调用生产库。
+
+**入口与布局**：`df_quant` 的公共头 `include/df/quant/dequant.h` 提供与 §4 同名的六个 `dequantize_*`，各有 FP32 位模式（`std::span<uint32_t>`）与 BF16 位模式（`std::span<uint16_t>`）输出重载。数据与 scale 分别传连续 row-major 只读视图和精确的**存储 shape**，不广播、不转置、不支持 stride、不推断 scale。packed E2M1 输入的最后维为逻辑最后维的一半，与 codec pack/unpack 的逻辑 nibble shape 不同；换算检查溢出。输出缓冲区容量可大于结果，只写结果前缀。[C++反量化]
+
+专家、普通 FP8 权重、Engram 只接受二维数据；SWA、主 KV、索引 K 至少一维并支持批维。逐行分组的 scale shape 必须精确为前导维加逻辑最后维组数，最后维须整除对应组大小；普通 FP8 权重的 scale shape 为二维块数的向上取整，包含行列尾块。格式、模型用途和组大小沿用 §4 与 MODEL §2，不在本节另立定义。[C++反量化][参照]
+
+**失败与校验顺序**：rank/shape/长度/容量不匹配、组不整除、NaN 数据、NaN 或非正/非有限 scale、数据/输出或 scale/输出重叠抛 `std::invalid_argument`；必要维度换算、元素数与输出字节长度等元数据算术溢出抛 `std::overflow_error`。数值上溢产生带符号 Inf，不是调用失败。元数据校验先于全部内容读取，内容校验先于任何输出写入，失败时输出不变。零元素张量允许，但仍须满足 rank、分组与 scale shape；元素计数沿用零维短路，不豁免必要的 packed 最后维换算。校验期间输入被并发修改属于调用方数据竞争，不在契约范围内。[C++反量化][D0007]
+
+packed E2M1 每个字节均是合法数据，所用 scale 格式均不能编码 Inf，因此测试不伪造这些静态表示不可表达的拒绝类；原始编码宽度由 C++ 定宽类型约束，执行器在窄化前检查 token。NaN 在模型反量化入口是拒绝用例，不使用 codec 的 NaN 分类比较代替拒绝。[C++反量化][反量化测试]
+
+**数值与环境**：复用 §6 解码与 BF16 舍入；有限 FP32 操作数拆成有效数和指数，用定宽整数乘法及通用 RNE 构造结果，含渐进下溢、符号零、舍入进位和上溢到 Inf。BF16 是独立输出边界，不表示 GEMM 必须提前舍入。数值路径不执行浮点算术，不读取或修改调用方浮点环境，不依赖“合法有限乘积都精确”简化算法。[C++反量化]
+
+在 [BUILD §1](BUILD.md#1-支持环境) 的支持环境中，六类入口的合法有限数据/scale 编码组合及两种输出分别对照 `ref/dequant.py`，多行、多组、批维和二维双尾块逐位一致；同一个生产有限乘法 helper 通过私有测试连接对照 `ref/formats.py::multiply_fp32`，补充公开合法编码组合不能覆盖的有限不精确乘积和 RNE 边界，不形成公共通用乘法 API。默认、向上/向下/向零舍入、FTZ、DAZ、FTZ+DAZ、解除溢出掩码八种 MXCSR 设置下均逐位一致；执行器核实设置，并在每次库调用前后比较完整 MXCSR，拒绝路径也不变。上溢敏感用例 `-448 × 2^127` 在向上舍入下仍为 `-inf`，次正规乘积与 E8M0 `0x00` scale 不被 FTZ/DAZ 冲刷。[反量化测试]
+
+**版本与验证边界**：本项只新增入口，不改变既有 codec 的位模式、零符号、打包次序或失败契约，§6 的格式契约版本仍为 1，不新增 pack 容器格式。本基线只作为逐元素 dequant 类 kernel 的上一级参照；给定 E8M0 的指数应用和 KV/SWA 布局验证不证明 scale 生成、动态量化、点积 scale 折叠、GEMM/GEMV、累加后乘 scale、提前 BF16 舍入、SIMD/CUDA 或端到端模型一致，不笼统宣称 K-Q1～K-Q3 全部完成。[C++反量化][反量化测试]
