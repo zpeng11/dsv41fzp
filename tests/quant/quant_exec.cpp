@@ -8,6 +8,11 @@
 // protocol or executor fault exits non-zero instead of producing an `err` response.
 // Output buffers are pre-filled with kFill bytes; inputs and outputs are allocated
 // with their exact element counts so out-of-bounds access is visible to ASan.
+//
+// Options: --mxcsr=default|up|ftz|daz sets the SSE control word before the first
+// request and verifies it is unchanged at exit; the `mxcsr` op reports it.
+// --fault=crash|exit|garbage|mismatch|drop deliberately breaks the executor so the
+// driver can prove that every such failure reaches CTest.
 
 #include <algorithm>
 #include <charconv>
@@ -24,6 +29,7 @@
 #include <string_view>
 #include <type_traits>
 #include <vector>
+#include <xmmintrin.h>
 
 #include "df/quant/codec.h"
 
@@ -178,9 +184,9 @@ std::string dispatch(const Request& req) {
   using u16 = std::uint16_t;
   using u32 = std::uint32_t;
   using i8 = std::int8_t;
-  if (req.op == "version") {
+  if (req.op == "version" || req.op == "mxcsr") {
     std::string response = "ok";
-    append_hex(response, q::format_contract_version());
+    append_hex(response, req.op == "version" ? q::format_contract_version() : _mm_getcsr());
     return response;
   }
   if (req.op == "decode_e2m1") return run<u8, u32>(req, q::decode_e2m1);
@@ -195,17 +201,75 @@ std::string dispatch(const Request& req) {
   die("unknown op '" + req.op + "'");
 }
 
+constexpr unsigned kMxcsrRoundingMask = 0x6000u;
+constexpr unsigned kMxcsrRoundUp = 0x4000u;
+constexpr unsigned kMxcsrFtz = 0x8000u;
+constexpr unsigned kMxcsrDaz = 0x0040u;
+constexpr unsigned kMxcsrStatusFlags = 0x003Fu;
+
+unsigned mxcsr_for(std::string_view env) {
+  const unsigned csr = _mm_getcsr();
+  if (env == "default") return csr;
+  if (env == "up") return (csr & ~kMxcsrRoundingMask) | kMxcsrRoundUp;
+  if (env == "ftz") return csr | kMxcsrFtz;
+  if (env == "daz") return csr | kMxcsrDaz;
+  die("unknown --mxcsr value '" + std::string(env) + "'");
+}
+
+// Changes the last hex digit of the first output element of an ok response.
+std::string corrupt(std::string response) {
+  if (response.starts_with("ok ")) {
+    char& digit = response[std::min(response.find(' ', 3), response.size()) - 1];
+    digit = digit == '0' ? '1' : '0';
+  }
+  return response;
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  std::string env = "default";
+  std::string fault = "none";
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view arg = argv[i];
+    if (arg.starts_with("--mxcsr=")) {
+      env = arg.substr(8);
+    } else if (arg.starts_with("--fault=")) {
+      fault = arg.substr(8);
+    } else {
+      die("unknown argument '" + std::string(arg) + "'");
+    }
+  }
+  if (fault != "none" && fault != "crash" && fault != "exit" && fault != "garbage" &&
+      fault != "mismatch" && fault != "drop") {
+    die("unknown --fault value '" + fault + "'");
+  }
+  const unsigned csr = mxcsr_for(env);
+  _mm_setcsr(csr);
+
   std::ios::sync_with_stdio(false);
   std::string line;
+  std::size_t served = 0;
   while (std::getline(std::cin, line)) {
     if (line.empty()) {
       continue;
     }
-    std::cout << dispatch(parse_request(line)) << '\n';
+    if (fault == "crash") std::abort();
+    std::string response = dispatch(parse_request(line));
+    if (served == 0 && fault == "garbage") response = "zzz";
+    if (fault == "mismatch") response = corrupt(std::move(response));
+    if (!(fault == "drop" && std::cin.peek() == EOF)) {
+      std::cout << response << '\n';
+    }
+    if (fault == "exit") {
+      std::cout.flush();
+      std::exit(3);
+    }
+    ++served;
   }
   std::cout.flush();
+  if ((_mm_getcsr() & ~kMxcsrStatusFlags) != (csr & ~kMxcsrStatusFlags)) {
+    die("MXCSR control bits changed while serving requests");
+  }
   return std::cout ? 0 : 2;
 }

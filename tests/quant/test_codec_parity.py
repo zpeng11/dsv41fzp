@@ -242,18 +242,40 @@ def failures(exe, cases, args=()):
     return [msg for case, resp in zip(cases, responses) if (msg := check(case, resp))]
 
 
+MXCSR_RC, MXCSR_FTZ, MXCSR_DAZ = 0x6000, 0x8000, 0x0040
+# environment -> (rounding control bits, FTZ, DAZ) the executor must report
+ENVIRONMENTS = {
+    "default": (0x0000, False, False),
+    "up": (0x4000, False, False),
+    "ftz": (0x0000, True, False),
+    "daz": (0x0000, False, True),
+}
+
+
+def mxcsr_case():
+    return Case("mxcsr", "mxcsr", (1,), [], 1, 4, ("ok", []))
+
+
 class Parity(unittest.TestCase):
-    def test_default_environment(self):
+    def test_environments(self):
         cases = parity_cases()
-        start = time.perf_counter()
-        self.assertEqual(failures(EXE, cases), [])
-        print(f"parity: {len(cases)} requests in {time.perf_counter() - start:.2f}s",
-              file=sys.stderr)
+        for env, (rc, ftz, daz) in ENVIRONMENTS.items():
+            with self.subTest(env=env):
+                start = time.perf_counter()
+                probe, *responses = run_executor(EXE, [mxcsr_case()] + cases,
+                                                 [f"--mxcsr={env}", *EXE_ARGS])
+                csr = probe[1][0]
+                self.assertEqual((csr & MXCSR_RC, bool(csr & MXCSR_FTZ), bool(csr & MXCSR_DAZ)),
+                                 (rc, ftz, daz), f"MXCSR {csr:#x} does not reflect {env}")
+                bad = [m for c, r in zip(cases, responses) if (m := check(c, r))]
+                self.assertEqual(bad, [])
+                print(f"parity[{env}]: {len(cases)} requests in "
+                      f"{time.perf_counter() - start:.2f}s", file=sys.stderr)
 
 
 class Contract(unittest.TestCase):
     def test_rejections_and_version(self):
-        self.assertEqual(failures(EXE, contract_cases()), [])
+        self.assertEqual(failures(EXE, contract_cases(), EXE_ARGS), [])
 
     def test_oracle_agrees_on_non_grid_and_bad_nibbles(self):
         for value in NON_GRID:
@@ -268,7 +290,39 @@ class Contract(unittest.TestCase):
             f.pack_e2m1([0] * 6, (2, 3))
 
 
-SUITES = {"parity": Parity, "contract": Contract}
+class Harness(unittest.TestCase):
+    """Every executor or protocol fault must fail the driver, never pass silently."""
+
+    def sample(self):
+        return parity_cases()[:2]
+
+    def test_faults_are_detected(self):
+        for fault in ("crash", "exit", "garbage", "drop"):
+            with self.subTest(fault=fault), self.assertRaises(HarnessError):
+                failures(EXE, self.sample(), [f"--fault={fault}"])
+        self.assertNotEqual(failures(EXE, self.sample(), ["--fault=mismatch"]), [])
+
+    def test_missing_executor_and_bad_protocol(self):
+        with self.assertRaises(HarnessError):
+            failures(EXE.with_name("df_quant_exec_missing"), self.sample())
+        too_wide = Case("too_wide", "decode_e4m3fn", (1,), [0x100], 1, 4, ("ok", [0]))
+        unknown = Case("unknown_op", "decode_nothing", (1,), [0], 1, 4, ("ok", [0]))
+        for case in (too_wide, unknown):
+            with self.subTest(case=case.name), self.assertRaises(HarnessError):
+                failures(EXE, [case])
+
+    def test_failures_reach_process_exit(self):
+        for suite, fault in (("parity", "mismatch"), ("contract", "crash")):
+            with self.subTest(suite=suite):
+                proc = subprocess.run(
+                    [sys.executable, __file__, "--exe", str(EXE), "--suite", suite,
+                     f"--exe-arg=--fault={fault}"],
+                    capture_output=True, text=True, timeout=900)
+                self.assertNotEqual(proc.returncode, 0)
+
+
+SUITES = {"parity": Parity, "contract": Contract, "harness": Harness}
+EXE_ARGS = []
 
 
 def main():
@@ -276,8 +330,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exe", required=True, type=Path)
     ap.add_argument("--suite", required=True, choices=sorted(SUITES))
+    ap.add_argument("--exe-arg", action="append", default=[],
+                    help="extra executor argument; used by the harness suite only")
     args = ap.parse_args()
     EXE = args.exe
+    EXE_ARGS.extend(args.exe_arg)
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(SUITES[args.suite])
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() and result.testsRun else 1
