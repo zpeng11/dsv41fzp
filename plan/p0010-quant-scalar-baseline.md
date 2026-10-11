@@ -1,7 +1,7 @@
 ---
 id: P0010
 title: 建立低精度格式 codec 的生产 scalar 基线与跨语言 parity 连接
-status: draft
+status: active
 created: 2026-10-11
 updated: 2026-10-11
 knowledge: pending
@@ -67,6 +67,7 @@ followups: []
 - 2026-10-11：评审指出：codec 解码在 FTZ 下可能静默出错；越界验收缺证据；“kernel parity 上一级参照”说法过宽；接口选择缺 D；格式契约版本未进验收；条目过大。用户选定：拆分为本项（codec 与 parity 连接）和 P0011（反量化布局与失败契约）；起草 D0006（proposed）；本项新增 `cpu-asan`。本机 GCC 15.2.0 的 ASan/UBSan 离线探针可用（见 D0006 实测前提）。未开始实现。
 - 2026-10-11：评审继续收紧 D0006：校验分为读数据前的元数据校验与写输出前的内容校验；改正次正规数举例；环境检查改以 MXCSR 完整控制字段为准。用户接受 D0006。MODEL.md 中“与官方 convert.py 逐位一致”未注明码点 8 例外、§4 断言 kernel parity 只对照 quant，经用户同意改为单独的 docs 修订，不再作为本项知识条目；计算类上一级参照的完整链条修订留待首个计算类 kernel 工作项。本项仍为 draft，待授权开工。
 - 2026-10-11：经用户同意，以 D0007 取代 D0006：反量化也改用整数位运算，取消调用时 MXCSR 检查，失败类别由三类减为两类（去掉 `std::runtime_error`）。本项的 codec、环境无关性与 `cpu-asan` 要求不变，只回填决策引用与异常类别数。仍为 draft。
+- 2026-10-11：用户授权开工；P0010 翻转为 active，实现走 `p0010-quant-scalar-baseline` 分支，接口与环境契约以 D0007 为准。
 
 ## 收尾
 
