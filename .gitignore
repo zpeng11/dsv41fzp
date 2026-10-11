@@ -12,6 +12,7 @@ __pycache__/
 
 # 临时归纳与跨会话草稿
 scratch/
+/.zcode/plans/
 
 # 部署器在目标机上创建
 /.venv/
