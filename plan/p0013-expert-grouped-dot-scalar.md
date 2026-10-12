@@ -1,9 +1,9 @@
 ---
 id: P0013
 title: 建立专家分组点积的生产 scalar 基线
-status: active
+status: completed
 created: 2026-10-12
-updated: 2026-10-12
+updated: 2026-10-13
 knowledge: updated
 docs: [docs/COMPUTE.md, docs/BUILD.md, docs/MODEL.md]
 bench: []
@@ -38,7 +38,7 @@ followups: []
 
   scale 交换与折叠的锚点为 dot=2、scale_a=`0xFE`、scale_b=`0x00`：规定次序得 Inf，交换或折叠得 2。恢复后全部测试通过，交付源字节不变。harness 沿用 P0010/P0011 协议，覆盖崩溃、非零退出、乱码、少响应与坏请求；trace 响应须检查阶段数量与位宽。错误结果或异常必须导致非零退出，但不以任意非零退出代替数值敏感性。
 - [x] **构建、治理与复现**：三个 CPU preset 构建并通过既有与新增测试；新增测试接入 `tests/quant` 的 quant CTest 序列，compute 进入 `cpu-asan` 所构建的 quant 生产库，不新增 preset。数值提交带 `Oracle:`；`python3 tools/check_repo.py --strict` 与提交范围审计 E=0 W=0 I=0；从源码目录外及干净检出复现，既有 oracle 测试回归通过。
-- [ ] **知识与人工收尾**：经用户确认后，生产入口与失败契约、特殊值分流、验证边界与环境要求最小增补到 COMPUTE（与 Python 拒绝类分开），测试入口增补到 BUILD，必要时更新 MODEL §4 与 STATUS。用户评审后才结项。
+- [x] **知识与人工收尾**：经用户确认后，生产入口与失败契约、特殊值分流、验证边界与环境要求最小增补到 COMPUTE（与 Python 拒绝类分开），测试入口增补到 BUILD，必要时更新 MODEL §4 与 STATUS。用户评审后才结项。
 
 ## 记录
 
@@ -71,6 +71,7 @@ followups: []
 - 执行器协议：payload 按 `;` 分段且各操作要求固定段数；计算请求四段，`overlap=a|w|sa|sb` 令指定输入与输出共用一块分配；trace 的 cap 须恰为 2K+4K/32+1；`add_fp32` 接受任意位模式对。codec/dequant/multiply 收到 `overlap=` 或段数不符即判协议错误。
 - 2026-10-12：另一 agent 评审（证据在 `scratch/p0013-test-review/`，不入库）以变异体证明四类违约实现可通过原测试：BF16 写出 span（计算输出按 `uint64` 取整分配，ASan 看不到越界）、内容先于元数据读取（短缓冲区用例不读越界，无法区分次序）、只拒绝同起点重叠（重叠用例均同起点）、清除 MXCSR 状态位（进入时状态位恒为零）。经核实全部属实，生产代码无误。修复提交 `82b89b7`：计算输出按精确长度分配；新增 `poison` 在 ASan 下使四份输入不可读，元数据拒绝用例各配一份加毒副本；`overlap=` 增加 `in_offset`/`out_offset`，覆盖双向部分重叠及两侧恰好相邻；执行器新增 `--status=set`，计算三个套件在八种 MXCSR 下各以状态位清空与置满运行两遍。评审的复现脚本在副本中重跑，四个变异体均被 contract 检出（heap-buffer-overflow、use-after-poison、偏移重叠误收、production call changed MXCSR）。
 - 2026-10-12：用户确认按评审修订的文档草案 v2，写入 COMPUTE §5/§6、BUILD §7 与 MODEL §4；§6 局部定义 [D0009]/[C++计算]/[计算测试] 来源标记，不复用 §1 中指官方镜像的 [代码]。
+- 2026-10-13：用户人工评审通过，同意结项并合入。
 
 ### 验收证据
 
@@ -83,6 +84,6 @@ followups: []
 
 ## 收尾
 
-- 验收或停止依据：技术验收七项已有证据（见上方验收证据，提交 `078ba1c`、`82b89b7`）；知识归档与人工评审未完成，尚不结项。
+- 验收或停止依据：八项验收全部成立。技术证据见上方验收证据（提交 `078ba1c`、`82b89b7`，干净克隆复现于 `82b89b7`）；知识归档于 `564fd2d`；2026-10-13 用户人工评审通过。未验证 SIMD/CUDA、K-E1/K-E2、官方 GPU、端到端一致及非 GCC/非 Linux x86_64 环境。
 - 知识处置：updated；经用户确认，生产入口的表示、失败、数值与环境、验证边界归档 COMPUTE §6，§5 改为快路径只对照 §6；测试入口与 `cpu-asan` 范围归档 BUILD §7；MODEL §4 链路图更新。选择理由留 D0009，过程与证据留本项。
-- 剩余义务：无转交义务；知识已归档，待用户人工评审后结项。
+- 剩余义务：无。同契约快路径、K-E1/K-E2 与官方 GPU 验证尚未立项，不属于本项义务。
