@@ -5,23 +5,21 @@ status: draft
 created: 2026-10-12
 updated: 2026-10-12
 knowledge: pending
-docs: [docs/MODEL.md, docs/QUANT.md, docs/BUILD.md]
+docs: [docs/MODEL.md, docs/QUANT.md, docs/COMPUTE.md, docs/BUILD.md]
 bench: []
-decisions: []
+decisions: [D0008]
 followups: []
 ---
 
 ## 意图
 
-在 [P0006](p0006-ref-format-oracle.md)、[P0010](p0010-quant-scalar-baseline.md) 与 [P0011](p0011-quant-dequant-scalar.md) 已验收的格式及逐元素反量化基础上，建立第一条计算类慢参照：专家路径中已经编码的 FP8 激活 × packed FP4 权重的单个输出分组点积，覆盖块内计算、累加后应用给定 scale 与跨块累加。
+接续 [P0006](p0006-ref-format-oracle.md)、[P0010](p0010-quant-scalar-baseline.md) 与 [P0011](p0011-quant-dequant-scalar.md)，建立官方 FP8×FP4 阶段约束下的单输出 CPU 规范参照，覆盖块内点积、给定 scale 应用与跨块累加。
 
-成功标准是交付具有独立验证依据、明确运算顺序及舍入边界的官方 FP8×FP4 路径 Python 计算 oracle，供后续同数值契约、另项验收的生产 C++ scalar 对照。它不是完整专家 GEMM，也不以格式映射精确或数学表达式相等推定整数改写、移动 scale、提前 BF16 舍入或官方 GPU 执行等价。
-
-本项不直接作为 MODEL §3.2 K-E1 W4A16（BF16 激活、E2M1 权重飞行反量化到 BF16）的 kernel parity 参照，不修改其 decode 默认路径规划。K-E1 开工前须另建与其激活、权重反量化落点及累加语义一致的计算参照。官方 FP8×FP4 语义也不等于 K-E2 的 W4A8-int8；该整数改写仍需另行验证。路径内部的实现 parity 与 W4A16 相对官方路径的质量偏差分别验收；本项只接收已编码激活，不覆盖从共同的量化前激活出发的动态量化链与质量对照。
+交付按 [COMPUTE](../docs/COMPUTE.md) 契约独立验证的 Python 实现，供后续同契约 C++ scalar 对照。不验收 K-E1/K-E2 或官方 GPU，不改变 W4A16 默认规划；各路径参照与跨路径质量边界见 [MODEL §4](../docs/MODEL.md#4-精确性链条)。
 
 ## 验收
 
-- [ ] **开工前置决策**：在实现前形成并经用户确认接受计算参照决策，明确参照归属、验证链位置、块内乘法与归约规则、乘 scale 顺序、跨块累加顺序、各步精度与舍入、FMA/融合语义、次正规及特殊值处理、FP32/BF16 输出边界与运行环境要求。区分官方源码可确认的顺序、本项目选定的 CPU 参照语义，以及仍需 GPU 仲裁的归约/cast/FTZ 细节；关键语义未明确时不得进入实现。同步定向修订 MODEL §4 与 K-Q2 的参照路由，区分官方 FP8×FP4、K-E1 W4A16 与 K-E2 整数改写各自所需参照；不将本项挂为逐元素 dequant 的已验证后继算法或 K-E1/K-E2 的直接 parity 依据，不以本项为由改变默认生产路径。
+- [x] **开工前置决策**：在实现前形成并经用户确认接受计算参照决策，明确参照归属、验证链位置、块内乘法与归约规则、乘 scale 顺序、跨块累加顺序、各步精度与舍入、FMA/融合语义、次正规及特殊值处理、FP32/BF16 输出边界与运行环境要求。区分官方源码可确认的顺序、本项目选定的 CPU 参照语义，以及仍需 GPU 仲裁的归约/cast/FTZ 细节；关键语义未明确时不得进入实现。同步定向修订 MODEL §4 与 K-Q2 的参照路由，区分官方 FP8×FP4、K-E1 W4A16 与 K-E2 整数改写各自所需参照；不将本项挂为逐元素 dequant 的已验证后继算法或 K-E1/K-E2 的直接 parity 依据，不以本项为由改变默认生产路径。
 - [ ] **一个计算路径、一个输出**：提供 Python 慢参照，以已编码 E4M3FN 激活、沿 K 打包的 E2M1 权重及给定 E8M0/UE8M0 激活与权重 scale 为输入，计算单个输出。激活与权重均固定沿 K 每 32 元素一组；第 j 个 32 元素块分别使用激活 `scale_a[j]` 与权重 `scale_b[j]`。K 须整除 32，激活长度为 K、packed 权重字节数为 K/2，两份 scale 长度各为 K/32；覆盖单块和多个相邻块。分组是已确认的模型路径边界，不留给前置决策重新选择，不支持 128 元素激活组或其他可配置组大小，不另立格式配置中心。明确非法输入和空输入契约，不隐式广播、补齐或生成 scale，不扩展为矩阵算子。
 - [ ] **计算与舍入独立验证**：期望值由独立精确算术和按已接受契约逐步舍入构造，不调用被测点积、累加或舍入辅助函数生成期望值。块内结果、应用 scale 后的块结果、跨块累加与最终输出分别检查；有限结果按声明的 FP32/BF16 位模式比较，零符号、Inf 与 NaN 按已接受契约检查，不以统一 allclose 掩盖顺序或舍入错误。
 - [ ] **边界与布局**：覆盖正负值、相消、累加顺序敏感、RNE 中点及两侧、指数进位、正常/次正规边界、下溢、上溢、零符号、极端 scale；多块用相邻不同的激活/权重 scale 验证两类每 32 元素分组索引，并以跨越 128 元素边界的定向用例识别错误地每四块共享激活 scale。覆盖全部数据码点和 scale 编码边界，不要求穷举所有点积向量；随机用例仅作固定种子的补充。合法输入造成的中间特殊值不得被默默忽略或钳制。
@@ -34,22 +32,36 @@ followups: []
 ### 范围与依据
 
 - 前置能力：P0006 的格式 oracle、P0010 的生产 codec 与 P0011 的给定 scale 反量化均已结项。本项新增计算参照，不修改既有 oracle 以迁就后续引擎实现。
-- 官方路径仲裁点：`third_party/reference/inference/model.py` 的 `linear`，以及 `kernel.py` 的 `fp4_gemm_kernel` / `fp4_gemm`。`model.py:27–30` 将激活/权重分组设为 32，scale 使用 UE8M0；`linear` 在 `model.py:187–194` 显式把 `fp8_block_size` 传给激活量化和 GEMM。底层 kernel 虽支持 32/128 且默认 128，该默认值被模型传参覆盖，不扩为本项输入契约。源码给出的块内 GEMM、激活 scale、权重 scale、跨块累加和输出 cast 顺序是依据，不是本机 GPU 实测证据；GPU 归约细节的未决边界须单列。
+- 官方源码阶段、分组与未决 GPU 细节见 [COMPUTE §1](../docs/COMPUTE.md#1-来源与参照边界)；计算选择依据为 [D0008](decisions/d0008-expert-grouped-dot-reference.md)，验证链及 K-Q2 路由见 [MODEL §4](../docs/MODEL.md#4-精确性链条)。
 - 范围外：K-E1 W4A16 计算参照与质量偏差验收、sm80 默认数值策略调整、K-E3 与 K-E1 端到端一致锁、128 元素激活组及其他可配置组大小、生产 C++ 计算实现、完整 GEMM/GEMV 与专家 MLP、整数点积改写与 scale 折叠优化、VNNI/SIMD/CUDA、性能论断与优化开关、有损编码与 amax/scale 生成、动态激活/KV 量化、真实权重与 pack 容器、调度/缓存系统、完整 FP32 模型 oracle 及端到端验证。
-- D0007 只约束 quant scalar 的 codec 与给定 scale 反量化，不自动约束本项的计算算法或环境策略；本项前置决策尚未建立，不提前填写悬空 D 引用或推定其 accepted。
 
 ### 执行与知识处置
 
-- 顺序：先评审并接受参照归属与数值语义决策，再建立单块参照，随后补跨块累加、独立测试、敏感性与复现证据。实现阶段另行授权后才翻转 active，并使用短命分支 `p0012-expert-grouped-dot-oracle`。
-- 计算契约拟归档到独立的 `docs/COMPUTE.md`，由 MODEL §4 路由；QUANT 只保留格式/逐元素反量化与计算参照的边界链接，BUILD 只补测试入口与实测环境。新页尚不存在，不在 front matter 填入悬空路径；实际正文写入须用户确认。
-- 知识预计为 updated；选择理由留前置 D，过程及验收证据留本项，不将长期契约重复归档在计划正文。后续生产 scalar 与快路径是明确排除的未来工作，未建项前不填写虚构 followups。
+- 开工仍须另行授权后翻转 active，使用短命分支 `p0012-expert-grouped-dot-oracle`。按单块、跨块与阶段观测、独立测试、敏感性及复现的顺序实现，不扩项。
+- 可复用既有格式解码、FP32 乘法和 BF16 转换；新增加法在计算模块内以整数有效数、指数对齐与显式 RNE 构造结果，不改写格式 oracle，不建设通用软件浮点 API 或第二个格式配置中心。
+- 分阶段检查可达边界：输入正负零、scale 后负零、相消后正零与负 FP32 次正规值转 BF16 负零分别验证。全部码点覆盖包含合法计算和 NaN 拒绝；不可达的元素乘法舍入用例不充作公开路径证据。定向用例先于固定种子随机补充，覆盖块内归约、scale 次序/错组、跨块重排、融合及提前 BF16；错组边界与失败传播按上述验收执行。
+- CTest 注册放在 quant 专用 scope 返回之后，不扩大 cpu-asan。COMPUTE 已归档契约，D0008 保留理由，本项保留过程与证据；BUILD 待实际测试入口及复现环境到位后更新。实现验收知识尚未产生，knowledge 保留 pending；未建后续项前不填写虚构 followups。
 - 2026-10-12：用户确认上一轮范围判断，并要求新建 P、清理旧 agent 工作残留与整理 STATUS，先不 commit。本次仅登记 draft 和同步状态入口；未建立或接受新 D，未授权计算 oracle 实现，未开始编码或运行本项数值验收。
 - 2026-10-12：用户确认激活和权重均固定沿 K 每 32 元素一组，K 整除 32，两份 scale 各为 K/32；128 元素激活组及其他可配置组大小明确排除。补充跨越 128 元素边界的错组敏感用例要求。此为范围澄清，不接受尚未定案的数值语义决策，不翻转 active，仍不 commit。
 - 2026-10-12：用户确认澄清官方 FP8×FP4 oracle 与 K-E1 W4A16 的参照边界：本项只供同数值契约的后续实现对照，不直接验收 K-E1 或 K-E2，不修改 W4A16 默认路径规划，不承接跨路径质量偏差与双 arch 一致锁。K-E1 所需同路径参照另项决定；本次仍仅更新 draft，不建立或接受新 D，不实现、不 commit。
 - 2026-10-12：用户确认当前 P0012 覆盖范围并授权按流程提交计划与 STATUS；本次仅提交已确认的 draft，不翻转 active，不建立或接受新 D，不授权实现，不合并或递增 VERSION。
+- 2026-10-12：用户明确接受开工前 review 的计算参照决策和验证链路由，授权按治理落实对应改进。登记 D0008 accepted、发布 COMPUTE 契约并定向修订 MODEL §4/K-Q2、QUANT 边界链接及 STATUS；第一项前置验收成立，其余验收条件不变。本次不启动编码、不翻转 active、不提交或合并、不递增 VERSION，也不将该确认当作人工结项验收。
+- 2026-10-12：用户确认精简后的 D0008 关联改动并授权提交。仅提交决策、契约与路由文档；数值语义、验收条件和评审证据不变，不授权实现、合并或结项，P0012 保持 draft、knowledge=pending，VERSION 不变。
+
+### 开工前评审证据
+
+- 环境：Python 3.12.8（conda-forge，GCC 13.3.0）、Linux 5.15.0-72-generic x86_64 / glibc 2.43、Intel Xeon Platinum 8350C。方法：`PYTHONDONTWRITEBYTECODE=1 python3 -` 临时标准库探针，以 `Fraction` 独立位域解码、精确运算与 `tests/quant/test_formats.py` 的相邻格点 binary32 RNE 方法构造结果，不调用被测点积；无 GPU、权重或在线来源。以下仅为数值设计证据，不替代后续 P0012 独立测试与敏感性验收。
+- 全部有限 E4M3FN×E2M1 编码组合共 4,064 对，FP32 不精确乘积为 0；不能将元素乘法不精确舍入当作公开输入可达边界。块内顺序累加仍有舍入差异。
+- 块内向量 `7×(448×6) + 2^-10 − 7×(448×6)`，按该顺序补零至 32 项：逐次 FP32 累加为 `0x00000000`，精确求和后一次舍入为 `0x3A800000`。合法码点为 E4M3FN `0x7E/0xFE/0x01`、E2M1 `0x7/0x1`，两份 scale 均为 `0x7F`。
+- 块 dot=2，scale_a=`0xFE`、scale_b=`0x00`：先乘激活 scale 上溢为 `0x7F800000`，再乘权重 scale 仍为 Inf；折叠 scale 或交换次序得 `0x40000000`。
+- 三块贡献 `[2^24, 1, -2^24]`：按 K 顺序累加为 `0x00000000`，先相消为 `0x3F800000`。由块 dot `[1,1,-1]`、激活 scale `[0x97,0x7F,0x97]` 与权重 scale 全 `0x7F` 构造。
+- 两块 dot 均为 `2^-10`，激活 scale 全 `0x00`、权重 scale `[0x73,0x72]`：分别乘法及加法 RNE 得 `0x00000001`，第二块最后一次乘法与累加融合得 `0x00000002`。
+- 两块贡献 `[1+2^-8,-1]`：仅最终转 BF16 得 `0x3B80`，每块提前转 BF16 得 `0x0000`。两份 scale 全 `0x7F`；第一块由 `1×1 + 2^-9×2` 构造。
+- 负零阶段边界：dot=`-2^-10`、scale_a=`0x00`、scale_b=`0x72` 的块贡献为 FP32 `0x80000000`，从正零累加后为正零；scale_b 改为 `0x73` 得最终 FP32 `0x80000001`，再转 BF16 得 `0x8000`。须分阶段检查，不以最终输出代替中间负零验证。
+- 评审基线命令：`PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_formats.py`（19 项通过）、既有 cpu-debug 构建目录 `ctest --test-dir build/cpu-debug --output-on-failure -R '^quant\\.(codec|dequant)\\.'`（7 项通过）、同目录 `-R '^bb\\.compile_flags$'`（通过）、`PYTHONDONTWRITEBYTECODE=1 python3 tests/tools/test_check_repo.py`（71 项通过）、`PYTHONDONTWRITEBYTECODE=1 python3 tools/check_repo.py --strict`（E=0 W=0 I=0）。本轮评审未重建 C++，未进行干净检出复现，未运行尚不存在的计算 oracle 验收。
 
 ## 收尾
 
-- 验收或停止依据：尚未启动；只有经用户确认的范围与草案，前置数值语义决策、实现、独立测试和验收证据均未到位。
-- 知识处置：pending；现有依据见 MODEL、QUANT、BUILD，新计算契约与验证链路由待决策和实测后经确认归档。
-- 剩余义务：本项范围尚未交付；后续同契约生产 C++ scalar、K-E1 W4A16 同路径参照及质量偏差验收、整数改写与 SIMD/CUDA 另项决定，不以本项草案推定开工或验收；未建接收项前不填写虚构 followups。
+- 验收或停止依据：仅第一项前置验收成立；实现、独立测试、敏感性、复现及人工评审未完成，保留 draft，开工仍待授权。
+- 知识处置：pending；契约与理由已归档 COMPUTE/D0008，路由见 MODEL/QUANT；BUILD 的实际入口、环境及实现验收知识待交付后确认归档。
+- 剩余义务：完成其余验收；生产 C++、K-E1 同路径参照与质量偏差、整数改写及 SIMD/CUDA 另项决定，未建接收项前不填写 followups。
