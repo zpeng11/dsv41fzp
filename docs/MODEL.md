@@ -143,8 +143,8 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
 | 编号 | 内容 | parity 参照 |
 | --- | --- | --- |
 | K-Q1 | E2M1 ⇄ int8 整数格（LUT、nibble 打包/展开，沿 K 每字节 2 值） | `ref/`（与官方 convert.py 逐位一致，E2M1 码点 8 除外：本仓解码为负零，官方 FP4_TABLE 为正零，见 [QUANT §2](QUANT.md#2-位模式与零符号)） |
-| K-Q2 | UE8M0 / E8M0 指数应用与折叠 | 同上 |
-| K-Q3 | E4M3 ⇄ BF16；KV 双 scale 变体（主 KV E4M3/16、索引 K UE8M0/32、SWA FP8/32） | 同上 |
+| K-Q2 | UE8M0 / E8M0 指数应用与折叠 | 逐元素 scale 应用对照 [QUANT](QUANT.md) 的格式/反量化参照；点积 scale 折叠须按计算契约另验（见 §4） |
+| K-Q3 | E4M3 ⇄ BF16；KV 双 scale 变体（主 KV E4M3/16、索引 K UE8M0/32、SWA FP8/32） | 格式转换与逐元素反量化对照 `ref/formats.py`、`ref/dequant.py`（[QUANT](QUANT.md)） |
 
 ### 3.2 专家路径（`src/kernels/`）
 
@@ -207,15 +207,25 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
 
 ## 4. 精确性链条
 
+各箭头表示参照与验收依赖，不表示源码推导即取得逐位等价或端到端证据；实现与验收状态以 `plan/STATUS.md` 和对应 P 条目为准。
+
 ```
-官方参考实现 `third_party/reference/inference/`（torch+tilelang，贪心逐 token 一致自证）
-  └─ ref/  Python FP32 oracle（精确 MX 反量化，语义镜像 model.py）
-       └─ src/quant/  C++ scalar 编解码（与 ref/ 逐位一致；与官方 convert.py 除 E2M1 码点 8 的零符号外逐位一致）
-            └─ 各 kernel parity（只对照验证链上一级已验证的 scalar 路径；格式与解码类对照 src/quant，计算类的上一级参照须另行建立）
-                 └─ 双 arch 顶层锁：sm80 与 sm120 端到端贪心逐 token 一致（冻结 prompt 集）
+官方参考实现 `third_party/reference/inference/`（布局与运算阶段来源）
+  ├─ 格式与逐元素反量化：规格定义 + ref/formats.py、ref/dequant.py
+  │    └─ src/quant/ C++ scalar codec 与给定 scale dequant
+  │         └─ 同契约格式/逐元素 dequant kernel parity
+  └─ 计算：官方源码阶段约束 + 独立精确算术 + 明确的 CPU 数值契约
+       ├─ 官方 FP8×FP4 阶段约束下的 CPU 规范：COMPUTE → Python 计算参照
+       │    └─ 后续同契约 C++ scalar → 同契约计算 kernel parity
+       ├─ K-E1 W4A16：BF16 激活、权重反量化落点及累加规则一致的计算参照
+       └─ K-E2 W4A8-int8：整数改写计算参照与相对官方路径的独立验证
 ```
 
-权重侧零容差（仅累加顺序差异）；激活侧（A16 vs 官方 FP8 dynamic）为已量化记录的偏差项。§2.9 三项 **[R]** 特性无参考实现，其验证只能靠质量门禁三件套（困惑度 / needle / 贪心 parity）+ 官方 API 输出对照。Engram 三表（token_map/multipliers/primes）与官方逐位一致是 §2.6 不变量的硬要求。
+格式与逐元素反量化契约见 [QUANT](QUANT.md)；官方 FP8×FP4 阶段约束下的 CPU 规范见 [COMPUTE](COMPUTE.md)，选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)。每段快代码只对照上一级已验证的同契约 scalar；格式正确不证明归约、移动 scale、提前 BF16 或整数改写等价。官方 GPU 的归约、融合及 cast/FTZ 须设备仲裁，不能由 CPU 契约推定。
+
+W4A16 decode 默认规划不变。实现 parity 与相对官方 FP8 dynamic 路径的质量偏差分别验收；后者须从共同量化前激活覆盖动态量化链并记录环境，不能以路径差异本身代替质量测量。双 arch 顶层锁仍按冻结 prompt 集独立验收 sm80/sm120 端到端贪心逐 token 一致，不由局部 oracle 保证。
+
+§2.9 三项 **[R]** 特性无参考实现，其验证只能靠质量门禁三件套（困惑度 / needle / 贪心 parity）+ 官方 API 输出对照。Engram 三表（token_map/multipliers/primes）与官方逐位一致是 §2.6 不变量的硬要求。
 
 
 ## 5. 采样建议（官方）
