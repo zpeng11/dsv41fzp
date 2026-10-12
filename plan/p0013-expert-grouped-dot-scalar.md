@@ -67,20 +67,21 @@ followups: []
 ### 开工与实现记录
 
 - 2026-10-12：用户确认 D0009 与当前范围并授权推进；D0009 accepted，本项转 active 并同步 STATUS，在 `p0013-expert-grouped-dot-scalar` 实现。新增 CTest 命名为 `quant.compute.{parity,contract,add,harness}`，与 Python oracle 自身的 `quant.compute` 在 BUILD 中区分。
-- 2026-10-12：实现提交 `078ba1c`。公共入口 `expert_grouped_dot` 的 FP32/BF16 重载与私有 `detail::trace_expert_grouped_dot` 共用同一计算核心（trace 指针为空即公开路径）；`binary_to_fp32` 提到 `detail` 供乘法与加法共用。加法初稿的对齐位为 39，实现中发现这样宽的对齐使 sticky 永不影响结果，丢失 sticky 的注入无法检出，也不符合 D0009 的 guard/round/sticky 设计；改为 3 位对齐加就近舍入到奇数。指数差不超过 3 时精确（覆盖全部近相消）；更大时较大操作数为正规数，和超过 2^25，舍入至少丢弃两位，保证与精确和的 RNE 一致。论证写在 helper 的函数级注释中。
+- 2026-10-12：实现提交 `078ba1c`。公共入口 `expert_grouped_dot` 的 FP32/BF16 重载与私有 `detail::trace_expert_grouped_dot` 共用同一计算核心（trace 指针为空即公开路径）；`binary_to_fp32` 提到 `detail` 供乘法与加法共用。加法初稿的对齐位为 39，实现中发现这样宽的对齐使 sticky 永不影响结果，丢失 sticky 的注入无法检出，也不符合 D0009 的 guard/round/sticky 设计；改为 3 位对齐：较小操作数右移截断，丢失位并入最低位（round-to-odd，即 jamming），再交给 binary32 RNE 构造。指数差不超过 3 时精确（覆盖全部近相消）；更大时较大操作数为正规数，和超过 2^25，舍入至少丢弃两位，保证与精确和的 RNE 一致。论证写在 helper 的函数级注释中。
 - 执行器协议：payload 按 `;` 分段且各操作要求固定段数；计算请求四段，`overlap=a|w|sa|sb` 令指定输入与输出共用一块分配；trace 的 cap 须恰为 2K+4K/32+1；`add_fp32` 接受任意位模式对。codec/dequant/multiply 收到 `overlap=` 或段数不符即判协议错误。
+- 2026-10-12：另一 agent 评审（证据在 `scratch/p0013-test-review/`，不入库）以变异体证明四类违约实现可通过原测试：BF16 写出 span（计算输出按 `uint64` 取整分配，ASan 看不到越界）、内容先于元数据读取（短缓冲区用例不读越界，无法区分次序）、只拒绝同起点重叠（重叠用例均同起点）、清除 MXCSR 状态位（进入时状态位恒为零）。经核实全部属实，生产代码无误。修复提交 `82b89b7`：计算输出按精确长度分配；新增 `poison` 在 ASan 下使四份输入不可读，元数据拒绝用例各配一份加毒副本；`overlap=` 增加 `in_offset`/`out_offset`，覆盖双向部分重叠及两侧恰好相邻；执行器新增 `--status=set`，计算三个套件在八种 MXCSR 下各以状态位清空与置满运行两遍。评审的复现脚本在副本中重跑，四个变异体均被 contract 检出（heap-buffer-overflow、use-after-poison、偏移重叠误收、production call changed MXCSR）。
 
 ### 验收证据
 
 环境：Intel Xeon Platinum 8350C，Linux 5.15.0-72-generic x86_64，GCC 15.2.0，CMake 4.4.4，Python 3.12.8。
 
-- 套件：`quant.compute.parity` 309 个请求（两份 4,064 对穷举向量各含 trace/fp32/bf16、49 组 scale 编码边界、多块与 128 边界布局、nibble 次序、树形/跨块/scale 次序敏感、21 类舍入与特殊值定向、24 个固定种子随机向量）；`quant.compute.contract` 42 个拒绝及 cap=1 成功用例，另验 `ref/` 对同类输入抛 `ValueError`；`quant.compute.add` 9 组定向加 20,000 对随机；`quant.compute.harness` 6 项。parity、contract、add 均在八种 MXCSR 下运行，并在请求前后核对控制字。
-- 回归：`cpu-debug` 20/20、`cpu-release` 20/20、`cpu-asan` 12/12，构建零告警，无 sanitizer 报告；`check_repo.py --strict` 与 `--range main..HEAD` 均为 E=0 W=0 I=0。从源码目录外用 `ctest --test-dir` 对全新克隆（`078ba1c`）运行三个 preset，结果相同，克隆工作树保持干净。
+- 套件：`quant.compute.parity` 309 个请求（两份 4,064 对穷举向量各含 trace/fp32/bf16、49 组 scale 编码边界、多块与 128 边界布局、nibble 次序、树形/跨块/scale 次序敏感、21 类舍入与特殊值定向、24 个固定种子随机向量）；`quant.compute.contract` 104 个请求＝86 个拒绝（含 22 个加毒元数据拒绝与 24 个偏移重叠拒绝）＋18 个成功（16 个恰好相邻与 2 个 cap=1），另验 `ref/` 对同类输入抛 `ValueError`；`quant.compute.add` 9 组定向加 20,000 对随机；`quant.compute.harness` 7 项（含 ASan 下加毒有效请求必须终止执行器）。parity、contract、add 在八种 MXCSR 下各以状态位清空与置满运行，并在请求前后核对完整控制字。
+- 回归：`cpu-debug` 20/20、`cpu-release` 20/20、`cpu-asan` 12/12，构建零告警，无 sanitizer 报告；`check_repo.py --strict` 与 `--range main..HEAD` 均为 E=0 W=0 I=0。从源码目录外用 `ctest --test-dir` 对全新克隆（`82b89b7`）运行三个 preset，结果相同，克隆工作树保持干净。
 - 敏感性：在 scratch 独立副本中逐项注入十类错误，每类都使指定用例的数值比较失败：scale 每四块共享 → `layout.group128_sensitive.fp32`；提前 BF16 → `rounding.bf16_tie_up.fp32`；跨块倒序 → `order.cross_block_sensitive.fp32`；块贡献 −0 规范化 → 只有 `rounding.underflow_negative_zero.trace` 与另一随机 trace 失败，最终输出不变；非有限值误送有限乘法、scale 交换、scale 折叠 → `order.scale_order.fp32`；丢失 sticky → `add.sticky`（另有 `add.tie_neighbors` 与 `add.random`）；nibble 颠倒 → `layout.nibble_order.trace`；相邻配对平衡树 → `order.tree_sensitive.fp32`。注入前后的干净对照均通过，交付源逐字节未变。临时脚本与原始输出不入库。
 - 未验证：SIMD/CUDA、K-E1/K-E2、官方 GPU、端到端一致、非 GCC 或非 Linux x86_64 环境。
 
 ## 收尾
 
-- 验收或停止依据：尚未启动，未实现生产计算入口，未运行 parity。
+- 验收或停止依据：技术验收七项已有证据（见上方验收证据，提交 `078ba1c`、`82b89b7`）；知识归档与人工评审未完成，尚不结项。
 - 知识处置：pending；既有契约见 docs/COMPUTE.md，未来生产入口契约与测试入口归 COMPUTE/BUILD。
 - 剩余义务：无转交义务；技术验收已有证据，待用户确认 COMPUTE/BUILD 增补并评审后结项。
