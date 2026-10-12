@@ -1,7 +1,7 @@
 ---
 id: P0013
 title: 建立专家分组点积的生产 scalar 基线
-status: draft
+status: active
 created: 2026-10-12
 updated: 2026-10-12
 knowledge: pending
@@ -64,8 +64,12 @@ followups: []
 - 2026-10-12：用户确认两轮设计评审补强：同路径逐阶段 parity、特殊值分流、三层失败类分离、定宽加法专项、八种环境矩阵、四类新增敏感性注入、输出 span 及无元数据溢出拒绝类的理由。
 - 2026-10-12：用户授权按第三轮评审压缩本项：与 COMPUTE §2/§3 重复的契约正文改为引用，数值路径、接口失败类与观测方式的选择理由移入 D0009（proposed）。验收条件不变。仍为 draft。
 
+### 开工与实现记录
+
+- 2026-10-12：用户确认 D0009 与当前范围并授权推进；D0009 accepted，本项转 active 并同步 STATUS，在 `p0013-expert-grouped-dot-scalar` 实现。新增 CTest 命名为 `quant.compute.{parity,contract,add,harness}`，与 Python oracle 自身的 `quant.compute` 在 BUILD 中区分。
+
 ## 收尾
 
 - 验收或停止依据：尚未启动，未实现生产计算入口，未运行 parity。
 - 知识处置：pending；既有契约见 docs/COMPUTE.md，未来生产入口契约与测试入口归 COMPUTE/BUILD。
-- 剩余义务：无转交义务；等待 D0009 确认及用户评审范围后开工。
+- 剩余义务：无转交义务；实现中。
