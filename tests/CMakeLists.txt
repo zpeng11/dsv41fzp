@@ -1,4 +1,4 @@
-# Unified CTest entry (P0009, P0010): C++ build baseline, quant parity and Python suites.
+# Unified CTest entry (P0009–P0012): C++ build baseline, quant parity and Python suites.
 # DF_TEST_SCOPE=quant (cpu-asan) registers only the quant subtree and its flag check.
 
 function(df_add_python_test name script)
@@ -19,4 +19,5 @@ endif()
 add_subdirectory(cpu/build_baseline)
 
 df_add_python_test(quant.formats "${PROJECT_SOURCE_DIR}/tests/quant/test_formats.py")
+df_add_python_test(quant.compute "${PROJECT_SOURCE_DIR}/tests/quant/test_compute.py")
 df_add_python_test(tools.check_repo "${PROJECT_SOURCE_DIR}/tests/tools/test_check_repo.py")

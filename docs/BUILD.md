@@ -1,6 +1,6 @@
 # BUILD.md — CPU-only 构建与测试契约
 
-本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)、[P0010](../plan/p0010-quant-scalar-baseline.md) 与 [P0011](../plan/p0011-quant-dequant-scalar.md)；状态不在本页记录。
+本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)、[P0010](../plan/p0010-quant-scalar-baseline.md)、[P0011](../plan/p0011-quant-dequant-scalar.md) 与 [P0012](../plan/p0012-expert-grouped-dot-oracle.md)；计算参照契约见 [COMPUTE](COMPUTE.md)，状态不在本页记录。
 
 **来源标记**：**[D]** D0005/D0007 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
 
@@ -87,6 +87,7 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `bb.contract.strict` / `bb.contract.fast_control` | 严格 target 不收缩；`-ffp-contract=fast` 对照版须收缩，证明探针敏感 |
 | `bb.compile_flags` | 从 `compile_commands.json` 验证严格选项只出现在应有的 target（含 `df_quant`，不含其执行器），全部 target 无 fast-math、`-march` 与 `-fsanitize` |
 | `quant.formats` | `tests/quant/test_formats.py` |
+| `quant.compute` | `tests/quant/test_compute.py`：专家 FP8×packed FP4 单输出计算参照的独立逐阶段期望、输入契约、临时副本敏感性与失败传播 |
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
 | `quant.codec.contract` | 每类输入拒绝、失败时输出不变、格式契约版本 |
 | `quant.codec.harness` | 执行器崩溃、退出、乱码、缺响应、缺执行器、协议错误与结果篡改均使驱动失败 |
@@ -95,6 +96,14 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.dequant.multiply` | 同一个生产有限 FP32 整数乘法 helper 的私有连接，定向 RNE 边界与固定种子补充，在八种 MXCSR 下对照 `ref/formats.py` |
 | `quant.dequant.harness` | 新协议、私有探针坏请求、执行器及结果故障均传播到进程退出 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
+
+计算参照的全部必选验收也可用下述单条命令运行；从源码目录外运行时使用脚本绝对路径。实测于 §1 环境，期望使用标准库 `Fraction` 位域与相邻格点逐步 RNE，不调用被测计算或舍入 helper；有限值、零和 Inf 按位检查，NaN 按分类检查。敏感性只在临时源码副本注入错误，错误结果及计算异常使普通和诊断入口非零退出，必选用例不得 skip。[代码][实测]
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_compute.py
+```
+
+参照入口是 `ref/compute.py` 的 `expert_grouped_dot` 与 `trace_expert_grouped_dot`，普通输出为 FP32 承载 float 或 BF16 原始位模式，观测共享计算路径。输入、分组、逐步舍入及验证链以 COMPUTE 为唯一契约来源；该验收不证明生产 C++、K-E1/K-E2、官方 GPU 或端到端一致。不初始化 Torch/TileLang/CUDA，不依赖目标机、权重、设备 dump 或网络。`quant.compute` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。[代码][实测]
 
 `cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）。两类 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器；私有乘法探针直接调用库中同一个 helper，不将通用乘法加入公共 API。该执行器与携带数据/scale shape 及两份原始编码的批量十六进制协议只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
