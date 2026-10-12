@@ -4,8 +4,8 @@ title: 建立专家分组点积的生产 scalar 基线
 status: active
 created: 2026-10-12
 updated: 2026-10-12
-knowledge: pending
-docs: []
+knowledge: updated
+docs: [docs/COMPUTE.md, docs/BUILD.md, docs/MODEL.md]
 bench: []
 decisions: [D0009]
 followups: []
@@ -70,6 +70,7 @@ followups: []
 - 2026-10-12：实现提交 `078ba1c`。公共入口 `expert_grouped_dot` 的 FP32/BF16 重载与私有 `detail::trace_expert_grouped_dot` 共用同一计算核心（trace 指针为空即公开路径）；`binary_to_fp32` 提到 `detail` 供乘法与加法共用。加法初稿的对齐位为 39，实现中发现这样宽的对齐使 sticky 永不影响结果，丢失 sticky 的注入无法检出，也不符合 D0009 的 guard/round/sticky 设计；改为 3 位对齐：较小操作数右移截断，丢失位并入最低位（round-to-odd，即 jamming），再交给 binary32 RNE 构造。指数差不超过 3 时精确（覆盖全部近相消）；更大时较大操作数为正规数，和超过 2^25，舍入至少丢弃两位，保证与精确和的 RNE 一致。论证写在 helper 的函数级注释中。
 - 执行器协议：payload 按 `;` 分段且各操作要求固定段数；计算请求四段，`overlap=a|w|sa|sb` 令指定输入与输出共用一块分配；trace 的 cap 须恰为 2K+4K/32+1；`add_fp32` 接受任意位模式对。codec/dequant/multiply 收到 `overlap=` 或段数不符即判协议错误。
 - 2026-10-12：另一 agent 评审（证据在 `scratch/p0013-test-review/`，不入库）以变异体证明四类违约实现可通过原测试：BF16 写出 span（计算输出按 `uint64` 取整分配，ASan 看不到越界）、内容先于元数据读取（短缓冲区用例不读越界，无法区分次序）、只拒绝同起点重叠（重叠用例均同起点）、清除 MXCSR 状态位（进入时状态位恒为零）。经核实全部属实，生产代码无误。修复提交 `82b89b7`：计算输出按精确长度分配；新增 `poison` 在 ASan 下使四份输入不可读，元数据拒绝用例各配一份加毒副本；`overlap=` 增加 `in_offset`/`out_offset`，覆盖双向部分重叠及两侧恰好相邻；执行器新增 `--status=set`，计算三个套件在八种 MXCSR 下各以状态位清空与置满运行两遍。评审的复现脚本在副本中重跑，四个变异体均被 contract 检出（heap-buffer-overflow、use-after-poison、偏移重叠误收、production call changed MXCSR）。
+- 2026-10-12：用户确认按评审修订的文档草案 v2，写入 COMPUTE §5/§6、BUILD §7 与 MODEL §4；§6 局部定义 [D0009]/[C++计算]/[计算测试] 来源标记，不复用 §1 中指官方镜像的 [代码]。
 
 ### 验收证据
 
@@ -83,5 +84,5 @@ followups: []
 ## 收尾
 
 - 验收或停止依据：技术验收七项已有证据（见上方验收证据，提交 `078ba1c`、`82b89b7`）；知识归档与人工评审未完成，尚不结项。
-- 知识处置：pending；既有契约见 docs/COMPUTE.md，未来生产入口契约与测试入口归 COMPUTE/BUILD。
-- 剩余义务：无转交义务；技术验收已有证据，待用户确认 COMPUTE/BUILD 增补并评审后结项。
+- 知识处置：updated；经用户确认，生产入口的表示、失败、数值与环境、验证边界归档 COMPUTE §6，§5 改为快路径只对照 §6；测试入口与 `cpu-asan` 范围归档 BUILD §7；MODEL §4 链路图更新。选择理由留 D0009，过程与证据留本项。
+- 剩余义务：无转交义务；知识已归档，待用户人工评审后结项。

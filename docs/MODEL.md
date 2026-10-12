@@ -216,7 +216,7 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
   │         └─ 同契约格式/逐元素 dequant kernel parity
   └─ 计算：官方源码阶段约束 + 独立精确算术 + 明确的 CPU 数值契约
        ├─ 官方 FP8×FP4 阶段约束下的 CPU 规范：COMPUTE → Python 计算参照
-       │    └─ 后续同契约 C++ scalar → 同契约计算 kernel parity
+       │    └─ src/quant/ C++ scalar 专家分组点积 → 同契约计算 kernel parity
        ├─ K-E1 W4A16：BF16 激活、权重反量化落点及累加规则一致的计算参照
        └─ K-E2 W4A8-int8：整数改写计算参照与相对官方路径的独立验证
 ```

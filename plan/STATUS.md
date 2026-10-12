@@ -10,7 +10,7 @@
 
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
-| [P0013 — 专家分组点积生产 scalar 基线](p0013-expert-grouped-dot-scalar.md) | active | 实现与技术验收证据已在分支；待用户确认 COMPUTE/BUILD 增补并评审后结项 |
+| [P0013 — 专家分组点积生产 scalar 基线](p0013-expert-grouped-dot-scalar.md) | active | 实现、技术验收与知识归档已在分支；待用户人工评审后结项 |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
 
 ## 数值入口与边界

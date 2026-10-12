@@ -95,6 +95,10 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.dequant.contract` | 数据与 scale 的元数据/内容拒绝、两类重叠、失败时输出不变和零元素 |
 | `quant.dequant.multiply` | 同一个生产有限 FP32 整数乘法 helper 的私有连接，定向 RNE 边界与固定种子补充，在八种 MXCSR 下对照 `ref/formats.py` |
 | `quant.dequant.harness` | 新协议、私有探针坏请求、执行器及结果故障均传播到进程退出 |
+| `quant.compute.parity` | 生产专家分组点积两种输出与私有 trace 的逐阶段结果，在八种 MXCSR、状态位清空与置满下对照 `ref/compute.py`；与 Python oracle 自身的 `quant.compute` 是不同测试 |
+| `quant.compute.contract` | 每类长度、内容与容量拒绝，ASan 下读前加毒的元数据拒绝，双向部分重叠拒绝与恰好相邻接受，失败时输出不变 |
+| `quant.compute.add` | 同一生产 FP32 加法 helper 的私有连接，定向舍入与 sticky 边界加固定种子补充 |
+| `quant.compute.harness` | 计算协议、trace 形状、超宽 token、未知输出模式、加毒有效性与执行器故障均传播到进程退出 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
 
 计算参照的全部必选验收也可用下述单条命令运行；从源码目录外运行时使用脚本绝对路径。实测于 §1 环境，期望使用标准库 `Fraction` 位域与相邻格点逐步 RNE，不调用被测计算或舍入 helper；有限值、零和 Inf 按位检查，NaN 按分类检查。敏感性只在临时源码副本注入错误，错误结果及计算异常使普通和诊断入口非零退出，必选用例不得 skip。[代码][实测]
@@ -105,7 +109,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_compute.py
 
 参照入口是 `ref/compute.py` 的 `expert_grouped_dot` 与 `trace_expert_grouped_dot`，普通输出为 FP32 承载 float 或 BF16 原始位模式，观测共享计算路径。输入、分组、逐步舍入及验证链以 COMPUTE 为唯一契约来源；该验收不证明生产 C++、K-E1/K-E2、官方 GPU 或端到端一致。不初始化 Torch/TileLang/CUDA，不依赖目标机、权重、设备 dump 或网络。`quant.compute` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。[代码][实测]
 
-`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）。两类 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器；私有乘法探针直接调用库中同一个 helper，不将通用乘法加入公共 API。该执行器与携带数据/scale shape 及两份原始编码的批量十六进制协议只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
+`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 不在其中。三组 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
 反量化与私有乘法测试覆盖默认、向上、向下、向零、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码；执行器回报设置，并在每次生产调用前后核对完整 MXCSR，包含异常路径，stdio 在核对窗口外。量化格式、数值与验证边界见 [QUANT §7](QUANT.md#7-给定-scale-的生产-scalar-反量化)。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
 

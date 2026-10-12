@@ -54,6 +54,15 @@ bf16_result = RNE_BF16(fp32_result)
 
 ## 5. 验证链路由
 
-独立验收后的 Python 参照可供同契约生产 C++ scalar 对照；scalar 验收后，快路径才可对照它。该计算分支不是逐元素 dequant 的已验证后继。[D]
+独立验收后的 Python 参照是 §6 生产 C++ scalar 的上一级；同契约快路径只对照 §6，不直接对照 Python 参照。该计算分支不是逐元素 dequant 的已验证后继。[D]
 
 本契约不直接验收 K-E1 W4A16、K-E2 整数改写、官方 GPU 或端到端一致，不改变 W4A16 默认规划。各路径需要同路径参照；相对官方路径的质量偏差还须从共同量化前输入覆盖动态量化链另验。契约接受不代表实现完成。[D]
+
+## 6. 生产 C++ scalar（`src/quant`）
+
+本节来源标记：**[D0009]** [D0009](../plan/decisions/d0009-compute-scalar-integer-path.md) 接受的接口与实现选择 · **[C++计算]** 本仓 `include/df/quant/compute.h` 与 `src/quant/compute.cpp` · **[计算测试]** `tests/quant/test_compute_parity.py` 经测试执行器的实测，环境见 [BUILD §1](BUILD.md#1-支持环境)，方法与结果见 [P0013](../plan/p0013-expert-grouped-dot-scalar.md)。数值语义仍以 §3 为唯一来源。
+
+- **表示**：入口 `df::quant::expert_grouped_dot`，四份 `std::span<const uint8_t>` 只读视图依次为激活、打包权重、`scale_a`、`scale_b`；K 取激活视图长度，长度要求同 §2。输出为调用方提供的 FP32 原始位 `std::span<uint32_t>` 或 BF16 原始位 `std::span<uint16_t>` 重载，只写第一个元素；重载不改变中间计算。[D0009][C++计算]
+- **失败**：只抛 `std::invalid_argument`：K 为零或不整除 32、权重或 scale 长度不符、输出为空、NaN 激活编码 `0x7F/0xFF` 或 NaN scale 编码 `0xFF`、任一输入与输出元素有字节重叠（相邻不算）。长度与重叠先于任何输入读取，内容校验先于输出写入，失败时输出不变。本入口不做元数据乘法，没有 `std::overflow_error` 类；K=0 被拒绝，与 QUANT 反量化接受零元素张量的约定有意不同。Python 侧的类型、宽度与输出模式拒绝属于 §2 的 oracle 契约，C++ 由定宽类型与重载表达，两者不一一对应。[D0009][C++计算][计算测试]
+- **数值与环境**：全部阶段以定宽整数位运算构造，不执行浮点运算，不读写浮点环境。块内乘积复用 QUANT §7 的有限乘法；乘 scale 前，Inf/NaN 中间值先分流（scale 严格为正，原样保留），只有有限值进入乘法。加法采用定宽对齐与 sticky，复用既有 binary32 RNE 构造；合法输入产生的 Inf/NaN 是结果，不是失败。在默认、向上、向下、向零、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码八种 MXCSR 下，状态位分别预先清空与置满，逐阶段结果均与 `ref/compute.py` 一致，每次调用前后完整 MXCSR 不变。[D0009][C++计算][计算测试]
+- **验证边界**：公开两种入口与私有 trace 连接执行同一计算核心，逐阶段对照 §4 的观测；私有加法探针对照 `ref/compute.py` 的加法，只补充公开路径难以构造的边界，不替代公开路径证据。不证明 SIMD/CUDA、K-E1/K-E2、官方 GPU 或端到端一致；测试入口见 [BUILD §7](BUILD.md#7-测试清单)。[D0009][计算测试]
