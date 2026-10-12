@@ -5,7 +5,7 @@
 //   codec:    <op> shape=<d0,d1,...> cap=<n> [alias] : <hex token> ...
 //   dequant:  <op> shape=<d0,d1,...> scale_shape=<d0,d1,...> cap=<n> [alias|scale_alias]
 //             : <data hex token> ... ; <scale hex token> ...
-//   compute:  <op> cap=<n> [overlap=a|w|sa|sb]
+//   compute:  <op> cap=<n> [overlap=a|w|sa|sb [in_offset=<b>] [out_offset=<b>]] [poison]
 //             : <a codes> ... ; <w bytes> ... ; <scale_a codes> ... ; <scale_b codes> ...
 //   add_fp32: add_fp32 cap=<n> : <left fp32 bits> ... ; <right fp32 bits> ...
 //   response: ok <hex output element> ...   (the whole output buffer, cap elements)
@@ -18,9 +18,14 @@
 // Compute ops are expert_grouped_dot_fp32/_bf16 and the private expert_grouped_dot_trace,
 // which answers products[K], partial_sums[K], dot, after_a, block, acc (K/32 each) and
 // the FP32 result through df::quant::detail::trace_expert_grouped_dot; its cap must be
-// exactly 2K + 4K/32 + 1 for valid K. `overlap=` places the named input and the output
-// in one raw allocation. The private add_fp32 op runs df::quant::detail::add_fp32 on
-// arbitrary bit-pattern pairs and needs cap >= the pair count. Buffers are pre-filled with kFill bytes and sized
+// exactly 2K + 4K/32 + 1 for valid K. Every buffer is an exact-length allocation so
+// ASan sees any access past it. `overlap=` places the named input at byte in_offset
+// and the output at byte out_offset (a multiple of the output element size) of one
+// exact raw allocation. `poison` marks all four inputs unreadable for the call under
+// ASan (a no-op otherwise; the `asan` op reports which), so a request with bad
+// metadata proves no input is read before metadata validation. The private add_fp32
+// op runs df::quant::detail::add_fp32 on arbitrary bit-pattern pairs and needs
+// cap >= the pair count. Buffers are pre-filled with kFill bytes and sized
 // to their exact element counts so out-of-bounds access is visible to ASan; `alias`
 // makes data and output share one raw allocation, `scale_alias` scales and output.
 // Dequant ops carry the suffix _fp32 or _bf16. The private `multiply_finite` op pairs
@@ -33,8 +38,9 @@
 //
 // Options: --mxcsr=default|up|down|zero|ftz|daz|ftz_daz|overflow_unmasked sets the
 // SSE control word before the first request and verifies the control bits at exit;
-// overflow_unmasked also clears pending status flags. The `mxcsr` op reports the
-// register. --fault=crash|exit|garbage|mismatch|drop deliberately breaks the executor
+// overflow_unmasked also clears pending status flags. --status=clear|set starts with
+// all six status flags clear (default) or set, so a call that clears or raises a flag
+// breaks the full-MXCSR window either way. The `mxcsr` op reports the register. --fault=crash|exit|garbage|mismatch|drop deliberately breaks the executor
 // so the driver can prove that every such failure reaches CTest.
 
 #include <algorithm>
@@ -53,6 +59,10 @@
 #include <type_traits>
 #include <vector>
 #include <xmmintrin.h>
+
+#if defined(__SANITIZE_ADDRESS__)
+#include <sanitizer/asan_interface.h>
+#endif
 
 #include "detail.h"
 #include "df/quant/codec.h"
@@ -86,6 +96,11 @@ struct Request {
   bool has_scale_section = false;
   bool has_overlap = false;
   std::size_t overlap = 0;
+  bool has_in_offset = false;
+  bool has_out_offset = false;
+  std::size_t in_offset = 0;
+  std::size_t out_offset = 0;
+  bool poison = false;
   std::vector<std::vector<std::uint64_t>> sections;
   std::vector<std::uint64_t> tokens;
   std::vector<std::uint64_t> scale_tokens;
@@ -174,6 +189,17 @@ Request parse_request(std::string_view line) {
       if (hit == std::end(kComputeInputs)) die("unknown overlap input '" + std::string(name) + "'");
       req.overlap = static_cast<std::size_t>(hit - std::begin(kComputeInputs));
       req.has_overlap = true;
+    } else if (field.starts_with("in_offset=")) {
+      if (req.has_in_offset) die("duplicate in_offset field");
+      req.in_offset = parse_number(field.substr(10), 10);
+      req.has_in_offset = true;
+    } else if (field.starts_with("out_offset=")) {
+      if (req.has_out_offset) die("duplicate out_offset field");
+      req.out_offset = parse_number(field.substr(11), 10);
+      req.has_out_offset = true;
+    } else if (field == "poison") {
+      if (req.poison) die("duplicate poison field");
+      req.poison = true;
     } else {
       die("unknown field '" + std::string(field) + "'");
     }
@@ -196,6 +222,10 @@ Request parse_request(std::string_view line) {
     req.scale_tokens = req.sections[1];
   }
   return req;
+}
+
+bool has_compute_fields(const Request& req) {
+  return req.has_overlap || req.has_in_offset || req.has_out_offset || req.poison;
 }
 
 void require_sections(const Request& req, std::size_t count, std::string_view family) {
@@ -277,7 +307,7 @@ std::string run(const Request& req, Fn fn) {
   if (!req.has_cap) {
     die("request lacks cap=");
   }
-  if (req.has_scale_shape || req.has_scale_section || req.scale_alias || req.has_overlap) {
+  if (req.has_scale_shape || req.has_scale_section || req.scale_alias || has_compute_fields(req)) {
     die("codec request carries dequant- or compute-only fields");
   }
   const std::size_t n_in = req.tokens.size();
@@ -331,8 +361,8 @@ std::string run_dequant(const Request& req, Fn fn) {
   if (req.alias && req.scale_alias) {
     die("alias and scale_alias are mutually exclusive");
   }
-  if (req.has_overlap) {
-    die("dequant request carries compute-only overlap=");
+  if (has_compute_fields(req)) {
+    die("dequant request carries compute-only fields");
   }
   require_sections(req, 2, "dequant");
   const std::size_t n_data = req.tokens.size();
@@ -397,7 +427,7 @@ std::string run_multiply(const Request& req) {
   if (!req.has_cap || !req.has_shape || !req.has_scale_shape || !req.has_scale_section) {
     die("multiply_finite request lacks cap=, shape=, scale_shape= or ';'");
   }
-  if (req.alias || req.scale_alias || req.has_overlap) {
+  if (req.alias || req.scale_alias || has_compute_fields(req)) {
     die("multiply_finite takes no alias flags");
   }
   require_sections(req, 2, "multiply_finite");
@@ -438,7 +468,7 @@ std::string run_multiply(const Request& req) {
 }
 
 // Exact-length buffers for the four compute inputs; with overlap= the named input
-// starts the output's raw allocation instead of owning one.
+// lives at byte in_offset of the shared raw allocation instead of owning one.
 struct ComputeInputs {
   std::unique_ptr<std::uint8_t[]> owners[4];
   std::span<const std::uint8_t> views[4];
@@ -448,8 +478,10 @@ ComputeInputs compute_inputs(const Request& req, std::uint8_t* shared) {
   ComputeInputs in;
   for (std::size_t i = 0; i < 4; ++i) {
     const auto& tokens = req.sections[i];
-    std::uint8_t* ptr = shared;
-    if (!(req.has_overlap && req.overlap == i)) {
+    std::uint8_t* ptr = nullptr;
+    if (req.has_overlap && req.overlap == i) {
+      ptr = shared + req.in_offset;
+    } else {
       in.owners[i] = std::make_unique<std::uint8_t[]>(tokens.size());
       ptr = in.owners[i].get();
     }
@@ -468,7 +500,35 @@ void require_compute_fields(const Request& req) {
   if (req.has_shape || req.has_scale_shape || req.alias || req.scale_alias) {
     die("compute request carries codec or dequant fields");
   }
+  if ((req.has_in_offset || req.has_out_offset) && !req.has_overlap) {
+    die("in_offset= and out_offset= require overlap=");
+  }
+  if (req.poison && req.has_overlap) {
+    die("poison and overlap= are mutually exclusive");
+  }
   require_sections(req, 4, "compute");
+}
+
+constexpr bool kAsan =
+#if defined(__SANITIZE_ADDRESS__)
+    true;
+#else
+    false;
+#endif
+
+void set_poison(const ComputeInputs& in, bool poisoned) {
+#if defined(__SANITIZE_ADDRESS__)
+  for (const auto& view : in.views) {
+    if (poisoned) {
+      ASAN_POISON_MEMORY_REGION(view.data(), view.size());
+    } else {
+      ASAN_UNPOISON_MEMORY_REGION(view.data(), view.size());
+    }
+  }
+#else
+  (void)in;
+  (void)poisoned;
+#endif
 }
 
 // Runs one public expert_grouped_dot overload on a cap-element output buffer.
@@ -476,20 +536,29 @@ template <class Out>
 std::string run_compute(const Request& req) {
   require_compute_fields(req);
   const std::size_t out_bytes = buffer_bytes(req.cap, sizeof(Out));
-  std::size_t bytes = out_bytes;
-  if (req.has_overlap) {
-    bytes = std::max(bytes, req.sections[req.overlap].size());
+  if (req.out_offset % sizeof(Out) != 0) {
+    die("out_offset must be a multiple of the output element size");
   }
-  const auto raw = std::make_unique<std::uint64_t[]>(bytes / 8 + (bytes % 8 != 0));
+  std::size_t bytes = req.out_offset + out_bytes;
+  if (req.has_overlap) {
+    bytes = std::max(bytes, req.in_offset + req.sections[req.overlap].size());
+  }
+  const auto raw = std::make_unique<std::uint8_t[]>(bytes);
   std::memset(raw.get(), kFill, bytes);
-  const ComputeInputs in = compute_inputs(req, reinterpret_cast<std::uint8_t*>(raw.get()));
-  Out* out_ptr = reinterpret_cast<Out*>(raw.get());
+  const ComputeInputs in = compute_inputs(req, raw.get());
+  Out* out_ptr = reinterpret_cast<Out*>(raw.get() + req.out_offset);
   const std::vector<unsigned char> before(reinterpret_cast<unsigned char*>(out_ptr),
                                           reinterpret_cast<unsigned char*>(out_ptr) + out_bytes);
+  if (req.poison) {
+    set_poison(in, true);
+  }
   const int outcome = call_guarded([&] {
     q::expert_grouped_dot(in.views[0], in.views[1], in.views[2], in.views[3],
                           std::span<Out>(out_ptr, req.cap));
   });
+  if (req.poison) {
+    set_poison(in, false);
+  }
   if (outcome != kOk) {
     return err_response(outcome, buffer_changed(before.data(), out_ptr, out_bytes));
   }
@@ -499,8 +568,8 @@ std::string run_compute(const Request& req) {
 // Private trace connection: one contiguous response buffer carved into the stage spans.
 std::string run_trace(const Request& req) {
   require_compute_fields(req);
-  if (req.has_overlap) {
-    die("expert_grouped_dot_trace takes no overlap=");
+  if (has_compute_fields(req)) {
+    die("expert_grouped_dot_trace takes no overlap=, offsets or poison");
   }
   const std::size_t k = req.sections[0].size();
   const std::size_t blocks = k / 32;
@@ -540,7 +609,7 @@ std::string run_trace(const Request& req) {
 // Private probe of the production FP32 adder; every bit pattern is a valid operand.
 std::string run_add(const Request& req) {
   if (!req.has_cap || req.has_shape || req.has_scale_shape || req.alias || req.scale_alias ||
-      req.has_overlap) {
+      has_compute_fields(req)) {
     die("add_fp32 request takes only cap=");
   }
   require_sections(req, 2, "add_fp32");
@@ -592,6 +661,10 @@ std::string dispatch(const Request& req) {
   using u16 = std::uint16_t;
   using u32 = std::uint32_t;
   using i8 = std::int8_t;
+  if (req.op == "asan") {
+    const std::uint32_t value = kAsan ? 1 : 0;
+    return ok_response(&value, 1);
+  }
   if (req.op == "version" || req.op == "mxcsr") {
     std::uint32_t value = 0;
     call_guarded([&] {
@@ -662,12 +735,15 @@ std::string corrupt(std::string response) {
 int main(int argc, char** argv) {
   std::string env = "default";
   std::string fault = "none";
+  std::string status = "clear";
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg = argv[i];
     if (arg.starts_with("--mxcsr=")) {
       env = arg.substr(8);
     } else if (arg.starts_with("--fault=")) {
       fault = arg.substr(8);
+    } else if (arg.starts_with("--status=")) {
+      status = arg.substr(9);
     } else {
       die("unknown argument '" + std::string(arg) + "'");
     }
@@ -676,7 +752,10 @@ int main(int argc, char** argv) {
       fault != "mismatch" && fault != "drop") {
     die("unknown --fault value '" + fault + "'");
   }
-  const unsigned csr = mxcsr_for(env);
+  if (status != "clear" && status != "set") {
+    die("unknown --status value '" + status + "'");
+  }
+  const unsigned csr = mxcsr_for(env) | (status == "set" ? kMxcsrStatusFlags : 0u);
   _mm_setcsr(csr);
 
   std::ios::sync_with_stdio(false);

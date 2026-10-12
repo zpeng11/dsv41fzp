@@ -10,11 +10,17 @@ the P0010/P0011 driver helpers: finite values (signed zeros included) and Inf
 bit-exact, NaN by class only, and any executor fault fails the run.
 
 Compute request protocol, one per line; the response grammar is the P0010 one:
-  <op> cap=<n> [overlap=a|w|sa|sb] : <a> ... ; <w bytes> ... ; <scale_a> ... ; <scale_b> ...
+  <op> cap=<n> [overlap=a|w|sa|sb [in_offset=<b>] [out_offset=<b>]] [poison]
+       : <a> ... ; <w bytes> ... ; <scale_a> ... ; <scale_b> ...
 - Ops: expert_grouped_dot_fp32 / _bf16 (public overloads, uint32 / uint16 output)
   and expert_grouped_dot_trace (private, cap exactly 2K + 4K/32 + 1: products[K],
   partial_sums[K], dot, after_a, block, acc per block, then the FP32 result).
+- overlap= shares one exact allocation between the named input (at byte in_offset)
+  and the output (at byte out_offset); poison makes every input unreadable under
+  ASan, so metadata rejections prove that no input was read first.
 - add_fp32 cap=<n> : <left bits> ... ; <right bits> ... runs the production adder.
+- Every environment runs twice, with the MXCSR status flags initially clear and set,
+  so a call that raises or clears any flag breaks the full-MXCSR window.
 - Rejections follow D0009: std::invalid_argument for K zero or not divisible by 32,
   weight/scale length mismatch, empty output, NaN activation or scale codes and any
   input overlapping the output; lengths and overlap are validated before any input
@@ -45,6 +51,7 @@ from test_dequant_parity import ENVIRONMENTS, MXCSR_STATUS, RawCase, mxcsr_probe
 EXE = None
 EXE_ARGS = []
 
+STATUS_STATES = ("clear", "set")
 A_CODES = tuple(code for code in range(256) if code not in (0x7F, 0xFF))
 SCALE_CODES = tuple(range(0xFF))
 SCALE_EDGES = (0x00, 0x01, 0x7E, 0x7F, 0x80, 0xFD, 0xFE)
@@ -64,15 +71,25 @@ ZERO = (0x00, 0x0)
 class ComputeCase(Case):
     """One compute request: four raw input sections plus an optional overlap target."""
 
-    def __init__(self, name, op, sections, cap, out_width, expect, kind, overlap=None):
+    def __init__(self, name, op, sections, cap, out_width, expect, kind, overlap=None,
+                 in_offset=None, out_offset=None, poison=False):
         super().__init__(name, op, (), [], cap, out_width, expect, kind)
         self.sections = [list(s) for s in sections]
         self.overlap = overlap
+        self.in_offset = in_offset
+        self.out_offset = out_offset
+        self.poison = poison
 
     def line(self):
         head = [self.op, f"cap={self.cap}"]
         if self.overlap:
             head.append(f"overlap={self.overlap}")
+        if self.in_offset is not None:
+            head.append(f"in_offset={self.in_offset}")
+        if self.out_offset is not None:
+            head.append(f"out_offset={self.out_offset}")
+        if self.poison:
+            head.append("poison")
         return (" ".join(head) + " : "
                 + " ; ".join(" ".join(f"{t:x}" for t in s) for s in self.sections))
 
@@ -284,10 +301,44 @@ def valid_input(k=64, seed=50):
     return a, w, [127] * (k // 32), [126] * (k // 32)
 
 
-def rejected(name, out, sections, cap=1, overlap=None):
+def rejected(name, out, sections, cap=1, overlap=None, **placement):
     op = f"expert_grouped_dot_{out}"
     return ComputeCase(name, op, sections, cap, 4 if out == FP32 else 2,
-                       ("err", "invalid_argument"), out, overlap)
+                       ("err", "invalid_argument"), out, overlap, **placement)
+
+
+def accepted(name, out, sections, cap=1, **placement):
+    expect = expert_grouped_dot(*sections, output=out)
+    bits = f.fp32_bits(expect) if out == FP32 else expect
+    return ComputeCase(name, f"expert_grouped_dot_{out}", sections, cap, 4 if out == FP32 else 2,
+                       ("ok", [bits]), out, **placement)
+
+
+INPUT_NAMES = ("a", "w", "sa", "sb")
+
+
+def offset_overlap_cases(out):
+    """Partial overlaps in both directions are rejected; exact adjacency on either side is not."""
+    sections = valid_input(256, 51)
+    width = 4 if out == FP32 else 2
+    cases = []
+    for index, name in enumerate(INPUT_NAMES):
+        size = len(sections[index])
+        assert size > width and size % width == 0
+        tag = f"{out}.offset_overlap_{name}"
+        cases += [
+            rejected(f"{tag}.output_inside_input", out, sections, overlap=name,
+                     in_offset=0, out_offset=width),
+            rejected(f"{tag}.output_on_input_last_byte", out, sections, overlap=name,
+                     in_offset=0, out_offset=size - width),
+            rejected(f"{tag}.input_inside_output", out, sections, overlap=name,
+                     in_offset=width - 1, out_offset=0),
+            accepted(f"{tag}.adjacent_after_input", out, sections, overlap=name,
+                     in_offset=0, out_offset=size),
+            accepted(f"{tag}.adjacent_before_input", out, sections, overlap=name,
+                     in_offset=width, out_offset=0),
+        ]
+    return cases
 
 
 def contract_cases():
@@ -295,7 +346,7 @@ def contract_cases():
     cases = []
     a, w, sa, sb = valid_input()
     for out in (FP32, BF16):
-        cases += [
+        metadata = [
             rejected(f"{out}.k_zero", out, ([], [], [], [])),
             rejected(f"{out}.k_16", out, (a[:16], w[:8], [], [])),
             rejected(f"{out}.k_48", out, (a[:48], w[:24], sa[:1], sb[:1])),
@@ -308,16 +359,17 @@ def contract_cases():
             rejected(f"{out}.long_scale_b", out, (a, w, sa, sb + [127])),
             rejected(f"{out}.empty_output", out, (a, w, sa, sb), cap=0),
         ]
+        cases += metadata
+        cases += [rejected(c.name + ".poisoned", out, c.sections, c.cap, poison=True)
+                  for c in metadata]
+        cases += offset_overlap_cases(out)
         for name in ("a", "w", "sa", "sb"):
             cases.append(rejected(f"{out}.overlap_{name}", out, (a, w, sa, sb), cap=2, overlap=name))
         for bad in (0x7F, 0xFF):
             cases.append(rejected(f"{out}.nan_a_last.{bad:x}", out, (a[:-1] + [bad], w, sa, sb), cap=3))
         cases.append(rejected(f"{out}.nan_scale_a_last", out, (a, w, sa[:-1] + [0xFF], sb), cap=3))
         cases.append(rejected(f"{out}.nan_scale_b_last", out, (a, w, sa, sb[:-1] + [0xFF]), cap=3))
-        expect = expert_grouped_dot(a, w, sa, sb, output=out)
-        bits = f.fp32_bits(expect) if out == FP32 else expect
-        cases.append(ComputeCase(f"{out}.ok_cap_1", f"expert_grouped_dot_{out}", (a, w, sa, sb), 1,
-                                 4 if out == FP32 else 2, ("ok", [bits]), out))
+        cases.append(accepted(f"{out}.ok_cap_1", out, (a, w, sa, sb)))
     trace_k48 = ComputeCase("trace.k_48", "expert_grouped_dot_trace", (a[:48], w[:24], sa[:1], sb[:1]),
                             2 * 48 + 4 + 1, 4, ("err", "invalid_argument"), FP32)
     trace_nan = ComputeCase("trace.nan_a_last", "expert_grouped_dot_trace", (a[:-1] + [0x7F], w, sa, sb),
@@ -411,18 +463,19 @@ class EnvironmentProbed(unittest.TestCase):
 
     label = "suite"
 
-    def run_probed(self, cases, env):
+    def run_probed(self, cases, env, status):
         probe = mxcsr_probe()
         start = time.perf_counter()
         first, *middle, last = run_executor(EXE, [probe, *cases, probe],
-                                            [f"--mxcsr={env}", *EXE_ARGS])
+                                            [f"--mxcsr={env}", f"--status={status}", *EXE_ARGS])
+        flags = MXCSR_STATUS if status == "set" else 0
         for response in (first, last):
             csr = response[1][0]
-            self.assertEqual(csr & ~MXCSR_STATUS, ENVIRONMENTS[env],
-                             f"MXCSR {csr:#x} does not reflect {env}")
+            self.assertEqual(csr, ENVIRONMENTS[env] | flags,
+                             f"MXCSR {csr:#x} does not reflect {env} with status {status}")
         bad = [msg for case, resp in zip(cases, middle) if (msg := check(case, resp))]
         self.assertEqual(bad, [])
-        print(f"{self.label}[{env}]: {len(cases)} requests in "
+        print(f"{self.label}[{env},{status}]: {len(cases)} requests in "
               f"{time.perf_counter() - start:.2f}s", file=sys.stderr)
 
     def run_all(self, build):
@@ -431,8 +484,9 @@ class EnvironmentProbed(unittest.TestCase):
         print(f"{self.label}: {len(cases)} cases, expected values in "
               f"{time.perf_counter() - start:.2f}s", file=sys.stderr)
         for env in ENVIRONMENTS:
-            with self.subTest(env=env):
-                self.run_probed(cases, env)
+            for status in STATUS_STATES:
+                with self.subTest(env=env, status=status):
+                    self.run_probed(cases, env, status)
 
 
 class Parity(EnvironmentProbed):
@@ -551,10 +605,39 @@ class Harness(unittest.TestCase):
                                        + " ".join(["0"] * 16) + " ; 7f ; 7f"),
             ("codec_overlap", "decode_e2m1 shape=1 cap=1 overlap=a : 0"),
             ("multiply_overlap", "multiply_finite shape=1 scale_shape=1 cap=1 overlap=a : 0 ; 0"),
+            ("in_offset_without_overlap", head + " in_offset=1 : " + payload),
+            ("out_offset_without_overlap", head + " out_offset=4 : " + payload),
+            ("misaligned_out_offset", head + " overlap=a out_offset=2 : " + payload),
+            ("duplicate_in_offset", head + " overlap=a in_offset=0 in_offset=1 : " + payload),
+            ("duplicate_out_offset", head + " overlap=a out_offset=0 out_offset=4 : " + payload),
+            ("duplicate_poison", head + " poison poison : " + payload),
+            ("poison_with_overlap", head + " overlap=a poison : " + payload),
+            ("trace_poison", valid.replace("expert_grouped_dot_fp32 cap=2",
+                                           "expert_grouped_dot_trace cap=69 poison")),
+            ("add_poison", "add_fp32 cap=1 poison : 0 ; 0"),
+            ("codec_poison", "decode_e2m1 shape=1 cap=1 poison : 0"),
+            ("dequant_in_offset", "dequantize_expert_fp32 shape=1,16 scale_shape=1,1 cap=32 "
+                                  "in_offset=0 : " + " ".join(["0"] * 16) + " ; 7f"),
         ]
         for name, text in lines:
             with self.subTest(case=name), self.assertRaises(HarnessError):
                 failures(EXE, [RawCase(name, text)])
+        with self.assertRaises(HarnessError):
+            failures(EXE, sample_cases(), ["--status=maybe"])
+
+    def test_poison_blocks_reads_under_asan(self):
+        """Under ASan a poisoned valid request must die; elsewhere poison is a no-op."""
+        asan = run_executor(EXE, [Case("asan", "asan", (), [], 1, 4, ("ok", []))])[0][1][0]
+        self.assertIn(asan, (0, 1))
+        valid = sample_cases()[1]
+        poisoned = ComputeCase("poisoned_valid", valid.op, valid.sections, valid.cap, 4,
+                               valid.expect, FP32, poison=True)
+        if asan:
+            with self.assertRaises(HarnessError):
+                failures(EXE, [poisoned])
+        else:
+            self.assertEqual(failures(EXE, [poisoned]), [])
+        print(f"harness: executor ASan={asan}", file=sys.stderr)
 
     def test_failures_reach_process_exit(self):
         for suite, fault in (("parity", "mismatch"), ("contract", "crash"), ("add", "exit")):
