@@ -5,7 +5,8 @@
 #include <cstdint>
 #include <stdexcept>
 
-// Private building blocks shared by the production codec and dequantization (P0011).
+// Private building blocks shared by the production codec, dequantization (P0011) and
+// the expert grouped dot (P0013).
 namespace df::quant::detail {
 
 std::size_t element_count(Shape shape);
@@ -17,6 +18,34 @@ std::uint16_t bf16_rne(std::uint32_t bits);
 // Both operands must be finite binary32 bit patterns. Results use RNE, gradual
 // underflow and signed infinity on overflow, without touching the FP environment.
 std::uint32_t multiply_finite(std::uint32_t left, std::uint32_t right) noexcept;
+
+// Rounds sign * significand * 2^exponent to binary32 with RNE, gradual underflow and
+// signed infinity on overflow; significand == 0 yields the signed zero.
+std::uint32_t binary_to_fp32(std::uint32_t sign, std::uint64_t significand, int exponent) noexcept;
+
+// One binary32 RNE addition of arbitrary bit patterns, specials included, under the
+// zero-sign and NaN rules of docs/COMPUTE.md §3.
+std::uint32_t add_fp32(std::uint32_t left, std::uint32_t right) noexcept;
+
+// Per-stage FP32 bit patterns of one expert grouped dot: products and partial_sums
+// hold K entries, the block-level spans K/32.
+struct DotTrace {
+  std::span<std::uint32_t> products;
+  std::span<std::uint32_t> partial_sums;
+  std::span<std::uint32_t> dot;
+  std::span<std::uint32_t> after_a;
+  std::span<std::uint32_t> block;
+  std::span<std::uint32_t> acc;
+};
+
+// Validates exactly like the public expert_grouped_dot entries, additionally requires
+// trace spans of the sizes above, and runs the same computation core while recording
+// every stage. Returns the FP32 result bits.
+std::uint32_t trace_expert_grouped_dot(std::span<const std::uint8_t> a_codes,
+                                       std::span<const std::uint8_t> w_packed,
+                                       std::span<const std::uint8_t> scale_a,
+                                       std::span<const std::uint8_t> scale_b,
+                                       const DotTrace& trace);
 
 // Only the actually consumed prefixes participate; empty ranges never overlap.
 template <class In, class Out>

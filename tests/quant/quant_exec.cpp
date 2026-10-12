@@ -1,16 +1,26 @@
-// Test executor for the production quant library (P0010 codec, P0011 dequant). Not a
-// production format.
+// Test executor for the production quant library (P0010 codec, P0011 dequant, P0013
+// compute). Not a production format.
 //
 // Reads one request per stdin line and writes one response per line:
 //   codec:    <op> shape=<d0,d1,...> cap=<n> [alias] : <hex token> ...
 //   dequant:  <op> shape=<d0,d1,...> scale_shape=<d0,d1,...> cap=<n> [alias|scale_alias]
 //             : <data hex token> ... ; <scale hex token> ...
+//   compute:  <op> cap=<n> [overlap=a|w|sa|sb]
+//             : <a codes> ... ; <w bytes> ... ; <scale_a codes> ... ; <scale_b codes> ...
+//   add_fp32: add_fp32 cap=<n> : <left fp32 bits> ... ; <right fp32 bits> ...
 //   response: ok <hex output element> ...   (the whole output buffer, cap elements)
 //             err <invalid_argument|overflow_error> changed=<0|1>
-// Tokens are range-checked against the input element width before narrowing. A
-// dequant request without scale_shape= or ';' is a protocol fault, as is dequant-only
-// metadata on a codec request; any protocol or executor fault exits non-zero instead
-// of producing an `err` response. Buffers are pre-filled with kFill bytes and sized
+// Tokens are range-checked against the input element width before narrowing. The
+// payload is split at every ';' and each op requires its exact section count; fields
+// belonging to another request family are protocol faults, and any protocol or
+// executor fault exits non-zero instead of producing an `err` response.
+//
+// Compute ops are expert_grouped_dot_fp32/_bf16 and the private expert_grouped_dot_trace,
+// which answers products[K], partial_sums[K], dot, after_a, block, acc (K/32 each) and
+// the FP32 result through df::quant::detail::trace_expert_grouped_dot; its cap must be
+// exactly 2K + 4K/32 + 1 for valid K. `overlap=` places the named input and the output
+// in one raw allocation. The private add_fp32 op runs df::quant::detail::add_fp32 on
+// arbitrary bit-pattern pairs and needs cap >= the pair count. Buffers are pre-filled with kFill bytes and sized
 // to their exact element counts so out-of-bounds access is visible to ASan; `alias`
 // makes data and output share one raw allocation, `scale_alias` scales and output.
 // Dequant ops carry the suffix _fp32 or _bf16. The private `multiply_finite` op pairs
@@ -46,6 +56,7 @@
 
 #include "detail.h"
 #include "df/quant/codec.h"
+#include "df/quant/compute.h"
 #include "df/quant/dequant.h"
 
 namespace {
@@ -73,9 +84,14 @@ struct Request {
   bool scale_alias = false;
   bool has_scale_shape = false;
   bool has_scale_section = false;
+  bool has_overlap = false;
+  std::size_t overlap = 0;
+  std::vector<std::vector<std::uint64_t>> sections;
   std::vector<std::uint64_t> tokens;
   std::vector<std::uint64_t> scale_tokens;
 };
+
+constexpr std::string_view kComputeInputs[] = {"a", "w", "sa", "sb"};
 
 std::uint64_t parse_number(std::string_view text, int base) {
   std::uint64_t value = 0;
@@ -151,24 +167,41 @@ Request parse_request(std::string_view line) {
     } else if (field == "scale_alias") {
       if (req.scale_alias) die("duplicate scale_alias field");
       req.scale_alias = true;
+    } else if (field.starts_with("overlap=")) {
+      if (req.has_overlap) die("duplicate overlap field");
+      const auto name = field.substr(8);
+      const auto* hit = std::find(std::begin(kComputeInputs), std::end(kComputeInputs), name);
+      if (hit == std::end(kComputeInputs)) die("unknown overlap input '" + std::string(name) + "'");
+      req.overlap = static_cast<std::size_t>(hit - std::begin(kComputeInputs));
+      req.has_overlap = true;
     } else {
       die("unknown field '" + std::string(field) + "'");
     }
   }
-  const std::string_view payload = line.substr(colon + 1);
-  const std::size_t sep = payload.find(';');
-  req.has_scale_section = sep != std::string_view::npos;
-  const std::string_view data_part =
-      sep == std::string_view::npos ? payload : payload.substr(0, sep);
-  const std::string_view scale_part =
-      sep == std::string_view::npos ? std::string_view() : payload.substr(sep + 1);
-  for (const auto token : split(data_part, ' ')) {
-    req.tokens.push_back(parse_number(token, 16));
+  std::string_view payload = line.substr(colon + 1);
+  while (true) {
+    const std::size_t sep = payload.find(';');
+    auto& section = req.sections.emplace_back();
+    for (const auto token : split(payload.substr(0, sep), ' ')) {
+      section.push_back(parse_number(token, 16));
+    }
+    if (sep == std::string_view::npos) {
+      break;
+    }
+    payload = payload.substr(sep + 1);
   }
-  for (const auto token : split(scale_part, ' ')) {
-    req.scale_tokens.push_back(parse_number(token, 16));
+  req.has_scale_section = req.sections.size() > 1;
+  req.tokens = req.sections[0];
+  if (req.has_scale_section) {
+    req.scale_tokens = req.sections[1];
   }
   return req;
+}
+
+void require_sections(const Request& req, std::size_t count, std::string_view family) {
+  if (req.sections.size() != count) {
+    die(std::string(family) + " request needs exactly " + std::to_string(count) + " sections");
+  }
 }
 
 template <class T>
@@ -244,8 +277,8 @@ std::string run(const Request& req, Fn fn) {
   if (!req.has_cap) {
     die("request lacks cap=");
   }
-  if (req.has_scale_shape || req.has_scale_section || req.scale_alias) {
-    die("codec request carries dequant-only fields");
+  if (req.has_scale_shape || req.has_scale_section || req.scale_alias || req.has_overlap) {
+    die("codec request carries dequant- or compute-only fields");
   }
   const std::size_t n_in = req.tokens.size();
   const std::size_t in_bytes = buffer_bytes(n_in, sizeof(In));
@@ -298,6 +331,10 @@ std::string run_dequant(const Request& req, Fn fn) {
   if (req.alias && req.scale_alias) {
     die("alias and scale_alias are mutually exclusive");
   }
+  if (req.has_overlap) {
+    die("dequant request carries compute-only overlap=");
+  }
+  require_sections(req, 2, "dequant");
   const std::size_t n_data = req.tokens.size();
   const std::size_t n_scale = req.scale_tokens.size();
   const std::size_t out_bytes = buffer_bytes(req.cap, sizeof(Out));
@@ -360,9 +397,10 @@ std::string run_multiply(const Request& req) {
   if (!req.has_cap || !req.has_shape || !req.has_scale_shape || !req.has_scale_section) {
     die("multiply_finite request lacks cap=, shape=, scale_shape= or ';'");
   }
-  if (req.alias || req.scale_alias) {
+  if (req.alias || req.scale_alias || req.has_overlap) {
     die("multiply_finite takes no alias flags");
   }
+  require_sections(req, 2, "multiply_finite");
   if (req.scale_shape != req.shape || req.tokens.size() != req.scale_tokens.size() ||
       req.cap < req.tokens.size()) {
     die("multiply_finite requires matching shapes and one pair per input element");
@@ -394,6 +432,136 @@ std::string run_multiply(const Request& req) {
     out[i] = q::detail::multiply_finite(data[i], scale[i]);
     if (_mm_getcsr() != before) {
       die("multiply_finite changed MXCSR");
+    }
+  }
+  return ok_response(out.get(), req.cap);
+}
+
+// Exact-length buffers for the four compute inputs; with overlap= the named input
+// starts the output's raw allocation instead of owning one.
+struct ComputeInputs {
+  std::unique_ptr<std::uint8_t[]> owners[4];
+  std::span<const std::uint8_t> views[4];
+};
+
+ComputeInputs compute_inputs(const Request& req, std::uint8_t* shared) {
+  ComputeInputs in;
+  for (std::size_t i = 0; i < 4; ++i) {
+    const auto& tokens = req.sections[i];
+    std::uint8_t* ptr = shared;
+    if (!(req.has_overlap && req.overlap == i)) {
+      in.owners[i] = std::make_unique<std::uint8_t[]>(tokens.size());
+      ptr = in.owners[i].get();
+    }
+    for (std::size_t t = 0; t < tokens.size(); ++t) {
+      ptr[t] = narrow_token<std::uint8_t>(tokens[t]);
+    }
+    in.views[i] = std::span<const std::uint8_t>(ptr, tokens.size());
+  }
+  return in;
+}
+
+void require_compute_fields(const Request& req) {
+  if (!req.has_cap) {
+    die("request lacks cap=");
+  }
+  if (req.has_shape || req.has_scale_shape || req.alias || req.scale_alias) {
+    die("compute request carries codec or dequant fields");
+  }
+  require_sections(req, 4, "compute");
+}
+
+// Runs one public expert_grouped_dot overload on a cap-element output buffer.
+template <class Out>
+std::string run_compute(const Request& req) {
+  require_compute_fields(req);
+  const std::size_t out_bytes = buffer_bytes(req.cap, sizeof(Out));
+  std::size_t bytes = out_bytes;
+  if (req.has_overlap) {
+    bytes = std::max(bytes, req.sections[req.overlap].size());
+  }
+  const auto raw = std::make_unique<std::uint64_t[]>(bytes / 8 + (bytes % 8 != 0));
+  std::memset(raw.get(), kFill, bytes);
+  const ComputeInputs in = compute_inputs(req, reinterpret_cast<std::uint8_t*>(raw.get()));
+  Out* out_ptr = reinterpret_cast<Out*>(raw.get());
+  const std::vector<unsigned char> before(reinterpret_cast<unsigned char*>(out_ptr),
+                                          reinterpret_cast<unsigned char*>(out_ptr) + out_bytes);
+  const int outcome = call_guarded([&] {
+    q::expert_grouped_dot(in.views[0], in.views[1], in.views[2], in.views[3],
+                          std::span<Out>(out_ptr, req.cap));
+  });
+  if (outcome != kOk) {
+    return err_response(outcome, buffer_changed(before.data(), out_ptr, out_bytes));
+  }
+  return ok_response(out_ptr, req.cap);
+}
+
+// Private trace connection: one contiguous response buffer carved into the stage spans.
+std::string run_trace(const Request& req) {
+  require_compute_fields(req);
+  if (req.has_overlap) {
+    die("expert_grouped_dot_trace takes no overlap=");
+  }
+  const std::size_t k = req.sections[0].size();
+  const std::size_t blocks = k / 32;
+  if (req.cap != 2 * k + 4 * blocks + 1) {
+    die("expert_grouped_dot_trace cap must be 2K + 4K/32 + 1");
+  }
+  const std::size_t out_bytes = buffer_bytes(req.cap, sizeof(std::uint32_t));
+  const auto out = std::make_unique<std::uint32_t[]>(req.cap);
+  std::memset(out.get(), kFill, out_bytes);
+  const ComputeInputs in = compute_inputs(req, nullptr);
+  std::uint32_t* cursor = out.get();
+  const auto take = [&cursor](std::size_t n) {
+    const std::span<std::uint32_t> span(cursor, n);
+    cursor += n;
+    return span;
+  };
+  q::detail::DotTrace trace;
+  trace.products = take(k);
+  trace.partial_sums = take(k);
+  trace.dot = take(blocks);
+  trace.after_a = take(blocks);
+  trace.block = take(blocks);
+  trace.acc = take(blocks);
+  std::uint32_t* const result = cursor;
+  const std::vector<unsigned char> before(reinterpret_cast<unsigned char*>(out.get()),
+                                          reinterpret_cast<unsigned char*>(out.get()) + out_bytes);
+  const int outcome = call_guarded([&] {
+    *result = q::detail::trace_expert_grouped_dot(in.views[0], in.views[1], in.views[2],
+                                                  in.views[3], trace);
+  });
+  if (outcome != kOk) {
+    return err_response(outcome, buffer_changed(before.data(), out.get(), out_bytes));
+  }
+  return ok_response(out.get(), req.cap);
+}
+
+// Private probe of the production FP32 adder; every bit pattern is a valid operand.
+std::string run_add(const Request& req) {
+  if (!req.has_cap || req.has_shape || req.has_scale_shape || req.alias || req.scale_alias ||
+      req.has_overlap) {
+    die("add_fp32 request takes only cap=");
+  }
+  require_sections(req, 2, "add_fp32");
+  const std::size_t n = req.sections[0].size();
+  if (req.sections[1].size() != n || req.cap < n) {
+    die("add_fp32 requires one right operand per left operand and cap >= pairs");
+  }
+  const std::size_t out_bytes = buffer_bytes(req.cap, sizeof(std::uint32_t));
+  const auto out = std::make_unique<std::uint32_t[]>(req.cap);
+  std::memset(out.get(), kFill, out_bytes);
+  std::vector<std::uint32_t> left(n);
+  std::vector<std::uint32_t> right(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    left[i] = narrow_token<std::uint32_t>(req.sections[0][i]);
+    right[i] = narrow_token<std::uint32_t>(req.sections[1][i]);
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    const unsigned before = _mm_getcsr();
+    out[i] = q::detail::add_fp32(left[i], right[i]);
+    if (_mm_getcsr() != before) {
+      die("add_fp32 changed MXCSR");
     }
   }
   return ok_response(out.get(), req.cap);
@@ -442,6 +610,10 @@ std::string dispatch(const Request& req) {
   if (req.op == "e2m1_to_grid") return run<u8, i8>(req, q::e2m1_to_grid);
   if (req.op == "grid_to_e2m1") return run<i8, u8>(req, q::grid_to_e2m1);
   if (req.op == "multiply_finite") return run_multiply(req);
+  if (req.op == "add_fp32") return run_add(req);
+  if (req.op == "expert_grouped_dot_fp32") return run_compute<u32>(req);
+  if (req.op == "expert_grouped_dot_bf16") return run_compute<u16>(req);
+  if (req.op == "expert_grouped_dot_trace") return run_trace(req);
   for (const auto& entry : kDequantOps) {
     if (!req.op.starts_with(entry.base)) {
       continue;

@@ -10,7 +10,7 @@
 namespace df::quant {
 namespace {
 
-// The significand has at most 48 bits; left shifts only normalize to 24 bits.
+// Significands span at most 64 bits; a left shift only widens a result below 2^24.
 std::uint64_t round_shift(std::uint64_t significand, int shift) noexcept {
   if (shift <= 0) {
     return significand << -shift;
@@ -26,6 +26,10 @@ std::uint64_t round_shift(std::uint64_t significand, int shift) noexcept {
   const std::uint64_t midpoint = std::uint64_t{1} << (shift - 1);
   return whole + (remainder > midpoint || (remainder == midpoint && (whole & 1)));
 }
+
+}  // namespace
+
+namespace detail {
 
 std::uint32_t binary_to_fp32(std::uint32_t sign, std::uint64_t significand, int exponent) noexcept {
   if (significand == 0) {
@@ -47,6 +51,10 @@ std::uint32_t binary_to_fp32(std::uint32_t sign, std::uint64_t significand, int 
   return sign | (static_cast<std::uint32_t>(top_exponent + 127) << 23) |
          (static_cast<std::uint32_t>(rounded) & 0x7FFFFFu);
 }
+
+}  // namespace detail
+
+namespace {
 
 std::size_t checked_product(std::size_t left, std::size_t right) {
   if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right) {
@@ -165,7 +173,7 @@ std::uint32_t multiply_finite(std::uint32_t left, std::uint32_t right) noexcept 
   const std::uint32_t right_sig = (right & 0x7FFFFFu) | (right_exp == 0 ? 0 : 0x800000u);
   const int exponent = (left_exp == 0 ? -149 : static_cast<int>(left_exp) - 150) +
                        (right_exp == 0 ? -149 : static_cast<int>(right_exp) - 150);
-  return binary_to_fp32(sign, static_cast<std::uint64_t>(left_sig) * right_sig, exponent);
+  return detail::binary_to_fp32(sign, static_cast<std::uint64_t>(left_sig) * right_sig, exponent);
 }
 
 }  // namespace detail
