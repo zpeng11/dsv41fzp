@@ -1,10 +1,10 @@
 ---
 id: P0016
 title: 清点本机官方 checkpoint，机械核对并更正 MODEL §2 的格式与体积事实
-status: active
+status: completed
 created: 2026-10-13
 updated: 2026-10-13
-knowledge: pending
+knowledge: updated
 docs: [docs/MODEL.md, docs/BUILD.md]
 bench: []
 decisions: [D0012]
@@ -23,7 +23,7 @@ followups: []
 - [x] **全量扫描**：全部张量的原始码直方图，码点分类经 `ref/formats`；报告 NaN 与非有限计数、E8M0 编码范围、E2M1 各码点频次（含码点 8）；扫描在合成数据上与逐元素朴素计数一致。
 - [x] **MODEL 更正**：§2.1～§2.2 中可由 checkpoint 判定的数字全部核对；专家元素数与字节数、专家与 Engram 合计、核算残差按实测更正；dtype 列区分存储与运行时；新增 [ckpt] 标记并写明快照 revision 与方法；新旧值对照留本项证据。
 - [x] **复现与治理**：合成测试接入 `cpu-debug`/`cpu-release` CTest，不进 `cpu-asan`；真实 checkpoint 的运行命令写入 BUILD §7；`--strict` 与 `--range` 审计 E=0 W=0 I=0；干净检出复现合成测试。
-- [ ] **知识与人工收尾**：MODEL 与 BUILD 归档；用户评审后结项。
+- [x] **知识与人工收尾**：MODEL 与 BUILD 归档；用户评审后结项。
 
 ## 记录
 
@@ -54,13 +54,14 @@ followups: []
 
 - 2026-10-13：用户同意以 checkpoint 清点为下一项方向，并把专家字节数更正纳入范围；本项以 draft、D0012 以 proposed 登记。
 - 2026-10-13：用户审议通过 D0012 与本项范围并授权推进；engram `q_weight`/`k_weight` 的运行时 dtype 按用户意见以 checkpoint 为准。D0012 accepted，本项 active。
+- 2026-10-13：用户评审实现、真实 checkpoint 证据与 MODEL/BUILD 改动，同意结项；源码未定存储的 FP32 参数只报告、不判错的规则随评审接受。
 
 ### 提交
 
-- `eaeb45b` D0012 接受与登记，`71c6f92` 清点工具与测试，`ae7dd7d` MODEL/BUILD 归档。
+- `eaeb45b` D0012 接受与登记，`71c6f92` 清点工具与测试，`ae7dd7d` MODEL/BUILD 归档，`4dcac12` 证据回填；本提交结项并同步 STATUS。
 
 ## 收尾
 
-- 验收或停止依据：尚未结项；六项技术验收已成立，待用户评审。
-- 知识处置：pending；已归档 MODEL §2（[ckpt] 更正与扫描结论）、MODEL §4 覆盖矩阵与 BUILD §7（运行与测试入口），结项时改为 updated。
-- 剩余义务：待结项时确定。
+- 验收或停止依据：七项验收全部成立；真实 checkpoint 96,085 个张量与独立预期零差异，全量扫描 PASS，证据见最终证据，2026-10-13 用户评审通过。
+- 知识处置：updated；[ckpt] 更正与扫描结论归档 [MODEL §2](../docs/MODEL.md#2-结构与格式)，清点入口的覆盖边界归档 [MODEL §4](../docs/MODEL.md#4-精确性链条) 矩阵，运行与测试入口归档 [BUILD §7](../docs/BUILD.md#7-测试清单)，取舍理由留 [D0012](decisions/d0012-checkpoint-inventory.md)。
+- 剩余义务：无。`src/artifact` 读取器、pack 格式与转换、热度画像均未立项，立项时以本工具为头部清单的上一级；源码未定存储的 FP32 参数只报告实际存储，不构成判错依据。
