@@ -225,6 +225,20 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
 
 格式与逐元素反量化契约见 [QUANT](QUANT.md)；BF16 动态激活量化 CPU 规范见 [ACTQUANT](ACTQUANT.md)，选择理由见 [D0010](../plan/decisions/d0010-act-quant-reference.md)，其输出可直接供给计算参照。官方 FP8×FP4 阶段约束下的 CPU 规范见 [COMPUTE](COMPUTE.md)，选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)。每段快代码只对照上一级已验证的同契约 scalar；格式正确不证明归约、移动 scale、提前 BF16 或整数改写等价。官方 GPU 的归约、融合及 cast/FTZ 须设备仲裁，不能由 CPU 契约推定。
 
+**验证链覆盖矩阵**（已验收参照的唯一边界来源；各契约页只链接本表）：
+
+| 入口 | 契约 | 是谁的上一级 | 不能据此验收 |
+| --- | --- | --- | --- |
+| `ref/formats.py` | [QUANT §2～§3](QUANT.md#2-位模式与零符号) | 生产 codec | 有损编码、scale 生成 |
+| `ref/dequant.py` | [QUANT §4](QUANT.md#4-反量化-api-与布局) | 生产给定 scale 反量化 | GEMM/GEMV、累加后乘 scale、移动或折叠 scale、提前 BF16、整数点积、动态量化 |
+| `df_quant` codec | [QUANT §6](QUANT.md#6-生产-c-codecsrcquant) | 同契约格式 kernel；覆盖 K-Q1 与 K-Q3 的 E4M3FN/BF16 解码和 FP32→BF16 | 乘 scale（由下一行验收）、BF16→E4M3 编码、点积 scale 折叠 |
+| `df_quant` 反量化 | [QUANT §7](QUANT.md#7-给定-scale-的生产-scalar-反量化) | 逐元素 dequant 类 kernel | 同 `ref/dequant.py` 行；不笼统表示 K-Q1～K-Q3 全部完成 |
+| `ref/compute.py` | [COMPUTE §1～§4](COMPUTE.md#1-来源与参照边界) | 生产专家分组点积 | 逐元素 dequant 的后继、K-E1 W4A16、K-E2 整数改写、scale 生成 |
+| `df_quant` 专家分组点积 | [COMPUTE §6](COMPUTE.md#6-生产-c-scalarsrcquant) | 同契约计算快路径 | 同 `ref/compute.py` 行 |
+| `ref/act_quant.py` | [ACTQUANT](ACTQUANT.md) | 同契约生产激活量化 scalar | K-X1 kernel、inplace/KV 量化、`fp4_act_quant`、K-E1/K-E2、完整专家 MLP |
+
+全部条目均不覆盖 SIMD/CUDA、官方 GPU 逐位等价、checkpoint 转换、K-E1 质量偏差与端到端一致；验证环境限 [BUILD §1](BUILD.md#1-支持环境) 的 ENV-A。
+
 W4A16 decode 默认规划不变。实现 parity 与相对官方 FP8 dynamic 路径的质量偏差分别验收；后者须从共同量化前激活覆盖动态量化链并记录环境，不能以路径差异本身代替质量测量。双 arch 顶层锁仍按冻结 prompt 集独立验收 sm80/sm120 端到端贪心逐 token 一致，不由局部 oracle 保证。
 
 §2.9 三项 **[R]** 特性无参考实现，其验证只能靠质量门禁三件套（困惑度 / needle / 贪心 parity）+ 官方 API 输出对照。Engram 三表（token_map/multipliers/primes）与官方逐位一致是 §2.6 不变量的硬要求。

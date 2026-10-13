@@ -6,15 +6,15 @@
 
 ## 1. 支持环境
 
-首批支持声明只覆盖下表实测配置；其他编译器、工具版本、操作系统与 CUDA translation unit 均未验证，不从本表推定支持。[D][实测]
+首批支持声明只覆盖下表实测配置，全仓以 **ENV-A** 指代；其他编译器、工具版本、操作系统与 CUDA translation unit 均未验证，不从本表推定支持。[D][实测]
 
 | 项 | 实测配置 |
 | --- | --- |
-| 平台 | Linux 5.15.0-72-generic x86_64，Ubuntu 26.04 LTS；Intel Xeon Platinum 8350C 双路（含 FMA） |
+| 平台 | Linux 5.15.0-72-generic x86_64，Ubuntu 26.04 LTS，glibc 2.43；Intel Xeon Platinum 8350C 双路（含 FMA） |
 | 编译器 | `g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0` |
 | CMake / CTest | 4.4.4（pip 包 `cmake`） |
 | 生成器 | Ninja 1.13.2（pip 包 `ninja`） |
-| Python | 3.12.8（miniforge，conda-forge） |
+| Python | 3.12.8（miniforge，conda-forge，GCC 13.3.0 构建） |
 | Git | 2.54.0 |
 
 `cmake_minimum_required` 与 preset schema 声明 3.21，是所用命令与 preset 特性的下限，不是已验证的支持版本。[代码]
@@ -92,34 +92,27 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
 | `quant.codec.contract` | 每类输入拒绝、失败时输出不变、格式契约版本 |
 | `quant.codec.harness` | 执行器崩溃、退出、乱码、缺响应、缺执行器、协议错误与结果篡改均使驱动失败 |
-| `quant.dequant.parity` | 六类给定 scale 反量化、两种输出、合法编码组合和布局边界，在八种 MXCSR 下对照 `ref/dequant.py` |
+| `quant.dequant.parity` | 六类给定 scale 反量化、两种输出、合法编码组合和布局边界，在八模式 MXCSR 下对照 `ref/dequant.py` |
 | `quant.dequant.contract` | 数据与 scale 的元数据/内容拒绝、两类重叠、失败时输出不变和零元素 |
-| `quant.dequant.multiply` | 同一个生产有限 FP32 整数乘法 helper 的私有连接，定向 RNE 边界与固定种子补充，在八种 MXCSR 下对照 `ref/formats.py` |
+| `quant.dequant.multiply` | 同一个生产有限 FP32 整数乘法 helper 的私有连接，定向 RNE 边界与固定种子补充，在八模式 MXCSR 下对照 `ref/formats.py` |
 | `quant.dequant.harness` | 新协议、私有探针坏请求、执行器及结果故障均传播到进程退出 |
-| `quant.compute.parity` | 生产专家分组点积两种输出与私有 trace 的逐阶段结果，在八种 MXCSR、状态位清空与置满下对照 `ref/compute.py`；与 Python oracle 自身的 `quant.compute` 是不同测试 |
+| `quant.compute.parity` | 生产专家分组点积两种输出与私有 trace 的逐阶段结果，在八模式 MXCSR（含状态位预置）下对照 `ref/compute.py`；与 Python oracle 自身的 `quant.compute` 是不同测试 |
 | `quant.compute.contract` | 每类长度、内容与容量拒绝，ASan 下读前加毒的元数据拒绝，双向部分重叠拒绝与恰好相邻接受，失败时输出不变 |
 | `quant.compute.add` | 同一生产 FP32 加法 helper 的私有连接，定向舍入与 sticky 边界加固定种子补充 |
 | `quant.compute.harness` | 计算协议、trace 形状、超宽 token、未知输出模式、加毒有效性与执行器故障均传播到进程退出 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
 
-计算参照的全部必选验收也可用下述单条命令运行；从源码目录外运行时使用脚本绝对路径。实测于 §1 环境，期望使用标准库 `Fraction` 位域与相邻格点逐步 RNE，不调用被测计算或舍入 helper；有限值、零和 Inf 按位检查，NaN 按分类检查。敏感性只在临时源码副本注入错误，错误结果及计算异常使普通和诊断入口非零退出，必选用例不得 skip。[代码][实测]
+计算参照与动态激活量化参照的全部必选验收也可单独运行；从源码目录外运行时使用脚本绝对路径。两者仅依赖标准库，不初始化 Torch/TileLang/CUDA，不依赖目标机、权重、设备 dump 或网络；错误结果、异常或 skip 使命令非零退出。验证方法与契约分别以 [COMPUTE](COMPUTE.md) 与 [ACTQUANT](ACTQUANT.md) 为唯一来源。[代码][实测]
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_compute.py
-```
-
-参照入口是 `ref/compute.py` 的 `expert_grouped_dot` 与 `trace_expert_grouped_dot`，普通输出为 FP32 承载 float 或 BF16 原始位模式，观测共享计算路径。输入、分组、逐步舍入及验证链以 COMPUTE 为唯一契约来源；该验收不证明生产 C++、K-E1/K-E2、官方 GPU 或端到端一致。不初始化 Torch/TileLang/CUDA，不依赖目标机、权重、设备 dump 或网络。`quant.compute` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。[代码][实测]
-
-动态激活量化参照的全部必选验收命令如下；源码目录外使用脚本绝对路径。仅标准库，不初始化 Torch/TileLang/CUDA，不依赖编译器、权重、GPU 或网络。数值期望用 `Fraction` 位域、独立邻点搜索与逐步 RNE，每组 scale 的精确指数另行复核；观测检查编码前的 binary32 位，不以最终 FP8 编码一致掩盖解码或商阶段错误。接口、环境与验证链以 [ACTQUANT](ACTQUANT.md) 为唯一契约来源，验收证据见 [P0014](../plan/p0014-act-quant-oracle.md)。实测环境同 §1。[代码][实测]
-
-```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_act_quant.py
 ```
 
-`quant.act_quant` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release。浮点环境探针使用 Python 标准库 `ctypes` 调用支持环境的 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
+`quant.compute` 与 `quant.act_quant` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
 
 `cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。三组 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
-反量化与私有乘法测试覆盖默认、向上、向下、向零、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码；执行器回报设置，并在每次生产调用前后核对完整 MXCSR，包含异常路径，stdio 在核对窗口外。量化格式、数值与验证边界见 [QUANT §7](QUANT.md#7-给定-scale-的生产-scalar-反量化)。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
+**八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。`quant.dequant.{parity,multiply}`、`quant.compute.parity` 与 `quant.act_quant` 使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
 
 `bb.*` 工件只在 `tests/cpu/build_baseline/`，是构建基线的测试件，不是引擎模块。[代码] 仓库检查 `tools/check_repo.py` 仍按 AGENTS.md 工作流独立执行，不由 CTest 替代。

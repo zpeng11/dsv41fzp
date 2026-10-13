@@ -12,7 +12,7 @@
 - **[参照]** 本仓 [ref/formats.py](../ref/formats.py)、[ref/dequant.py](../ref/dequant.py)；**[测试]** [tests/quant/test_formats.py](../tests/quant/test_formats.py)。
 - **[C++]** 本仓 [include/df/quant/codec.h](../include/df/quant/codec.h)、[src/quant/](../src/quant/)；**[C++测试]** [tests/quant/test_codec_parity.py](../tests/quant/test_codec_parity.py) 经测试执行器 [quant_exec.cpp](../tests/quant/quant_exec.cpp) 调用生产库。
 
-本页编码数字是规格值，不是吞吐或性能测量。验证环境为 Python 3.12.8（conda-forge，GCC 13.3.0）、Linux 5.15.0-72-generic x86_64 / glibc 2.43、Intel Xeon Platinum 8350C；依赖仅标准库，不依赖 NumPy、Torch、GPU 或模型权重。方法为整数位域解码、整数有效数乘法与显式 RNE；独立测试用 `Fraction` 位域定义和相邻格点距离比较。验收命令与证据保留在 [P0006](../plan/p0006-ref-format-oracle.md#收尾)。
+本页编码数字是规格值，不是吞吐或性能测量。验证环境为 [BUILD §1](BUILD.md#1-支持环境) 的 ENV-A；依赖仅标准库，不依赖 NumPy、Torch、GPU 或模型权重。方法为整数位域解码、整数有效数乘法与显式 RNE；独立测试用 `Fraction` 位域定义和相邻格点距离比较。验收命令与证据保留在 [P0006](../plan/p0006-ref-format-oracle.md#收尾)。
 
 ## 2. 位模式与零符号
 
@@ -59,7 +59,7 @@ E2M1 整数格为解码值乘二的精确整数。正负零都变成整数零，
 
 官方落点需按路径区分：Engram `model.py:319–320`、转换器 `convert.py:157–173` 的 wo_a 路径有明确 BF16 落点；KV/SWA 的 inplace 量化回写输入 dtype（`kernel.py:82–86,167–172`）；专家 `kernel.py:538–553` 是 FP4→FP32→FP8 后 GEMM，再对累加值应用 scale。[代码] 不能从逐元素反量化验收推出移动 scale、提前 BF16 舍入或整数点积改写的等价性。
 
-本格式/给定 scale 反量化 oracle 不证明有损量化或 scale 生成；模型实际 BF16 激活动态量化的独立 CPU 契约见 [ACTQUANT](ACTQUANT.md)。动态 KV 量化、GPU cast/FTZ、kernel parity、checkpoint 转换与端到端模型一致仍不在本页范围，也不替代 `src/quant` 或 K-Q1～K-Q3 的引擎实现验收。独立计算分支契约见 [COMPUTE](COMPUTE.md)，不是逐元素 dequant 的已验证后继；各路径的 parity 参照见 [MODEL §4](MODEL.md#4-精确性链条)。
+本页各参照的覆盖与不覆盖范围见 [MODEL §4](MODEL.md#4-精确性链条) 覆盖矩阵。模型实际 BF16 激活动态量化见 [ACTQUANT](ACTQUANT.md)，计算分支见 [COMPUTE](COMPUTE.md)。
 
 ## 6. 生产 C++ codec（`src/quant`）
 
@@ -73,13 +73,13 @@ E2M1 整数格为解码值乘二的精确整数。正负零都变成整数零，
 
 **静态类型排除**（无运行时检查）：负维度（`size_t`）、bool 或浮点充当整数、超出 `uint8_t`/`uint16_t`/`uint32_t` 宽度的位模式。对应 `ref/` 的 `TypeError` 与位宽 `ValueError` 在 C++ 中不可表达；测试执行器在窄化前检查 token 宽度，超宽按执行器故障处理，不计为库的拒绝。[C++][C++测试]
 
-**环境无关性**：全部入口以定宽整数位运算构造结果，数值路径不执行浮点运算，不读取也不修改浮点环境。parity 在默认、MXCSR 向上舍入、FTZ、DAZ 四种调用环境下均与 `ref/` 逐位一致（环境同 [BUILD §1](BUILD.md#1-支持环境)）。[C++测试]
+**环境无关性**：全部入口以定宽整数位运算构造结果，数值路径不执行浮点运算，不读取也不修改浮点环境。parity 在默认、MXCSR 向上舍入、FTZ、DAZ 四种调用环境下均与 `ref/` 逐位一致（ENV-A）。[C++测试]
 
 **格式契约版本**：`format_contract_version()` 返回 `src/quant/contract.h` 中的常量，与引擎 `VERSION` 独立。任一位模式、零符号、打包次序或失败契约变化时递增。当前值：
 
 格式契约版本：1
 
-**验证边界**：parity 由 [C++测试] 覆盖 §5 所列码点穷举、全部 BF16 相邻格点中点及其两侧邻值，以及每类拒绝。它对应 K-Q1（codec、布局与整数格）以及 K-Q3 中的 E4M3FN/BF16 解码与 FP32→BF16 舍入；给定 scale 的反量化由 §7 单独验证，codec parity 不代替乘 scale parity，也不覆盖 BF16→E4M3 编码、点积 scale 折叠或任何 SIMD/CUDA 路径。
+**验证边界**：parity 由 [C++测试] 覆盖 §5 所列码点穷举、全部 BF16 相邻格点中点及其两侧邻值，以及每类拒绝。它对应 K-Q1（codec、布局与整数格）以及 K-Q3 中的 E4M3FN/BF16 解码与 FP32→BF16 舍入；乘 scale 由 §7 单独验证，其余不覆盖项见 [MODEL §4](MODEL.md#4-精确性链条)。
 
 ## 7. 给定 scale 的生产 scalar 反量化
 
@@ -95,6 +95,6 @@ packed E2M1 每个字节均是合法数据，所用 scale 格式均不能编码 
 
 **数值与环境**：复用 §6 解码与 BF16 舍入；有限 FP32 操作数拆成有效数和指数，用定宽整数乘法及通用 RNE 构造结果，含渐进下溢、符号零、舍入进位和上溢到 Inf。BF16 是独立输出边界，不表示 GEMM 必须提前舍入。数值路径不执行浮点算术，不读取或修改调用方浮点环境，不依赖“合法有限乘积都精确”简化算法。[C++反量化]
 
-在 [BUILD §1](BUILD.md#1-支持环境) 的支持环境中，六类入口的合法有限数据/scale 编码组合及两种输出分别对照 `ref/dequant.py`，多行、多组、批维和二维双尾块逐位一致；同一个生产有限乘法 helper 通过私有测试连接对照 `ref/formats.py::multiply_fp32`，补充公开合法编码组合不能覆盖的有限不精确乘积和 RNE 边界，不形成公共通用乘法 API。默认、向上/向下/向零舍入、FTZ、DAZ、FTZ+DAZ、解除溢出掩码八种 MXCSR 设置下均逐位一致；执行器核实设置，并在每次库调用前后比较完整 MXCSR，拒绝路径也不变。上溢敏感用例 `-448 × 2^127` 在向上舍入下仍为 `-inf`，次正规乘积与 E8M0 `0x00` scale 不被 FTZ/DAZ 冲刷。[反量化测试]
+在 [BUILD §1](BUILD.md#1-支持环境) 的支持环境中，六类入口的合法有限数据/scale 编码组合及两种输出分别对照 `ref/dequant.py`，多行、多组、批维和二维双尾块逐位一致；同一个生产有限乘法 helper 通过私有测试连接对照 `ref/formats.py::multiply_fp32`，补充公开合法编码组合不能覆盖的有限不精确乘积和 RNE 边界，不形成公共通用乘法 API。两者在 [BUILD §7](BUILD.md#7-测试清单) 的八模式 MXCSR 下均逐位一致，完整 MXCSR 不变。上溢敏感用例 `-448 × 2^127` 在向上舍入下仍为 `-inf`，次正规乘积与 E8M0 `0x00` scale 不被 FTZ/DAZ 冲刷。[反量化测试]
 
-**版本与验证边界**：本项只新增入口，不改变既有 codec 的位模式、零符号、打包次序或失败契约，§6 的格式契约版本仍为 1，不新增 pack 容器格式。本基线只作为逐元素 dequant 类 kernel 的上一级参照；给定 E8M0 的指数应用和 KV/SWA 布局验证不证明 scale 生成、动态量化、点积 scale 折叠、GEMM/GEMV、累加后乘 scale、提前 BF16 舍入、SIMD/CUDA 或端到端模型一致，不笼统宣称 K-Q1～K-Q3 全部完成。[C++反量化][反量化测试]
+**版本与验证边界**：本项只新增入口，不改变既有 codec 的位模式、零符号、打包次序或失败契约，§6 的格式契约版本仍为 1，不新增 pack 容器格式。本基线是逐元素 dequant 类 kernel 的上一级参照，不覆盖项见 [MODEL §4](MODEL.md#4-精确性链条)。[C++反量化][反量化测试]
