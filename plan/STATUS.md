@@ -11,6 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
+| [P0015 — docs 与 plan 单一来源整理](p0015-doc-slimming.md) | active | 按 [D0011](decisions/d0011-doc-single-source.md) 整理 docs、模板、STATUS 与已结项 P |
 
 ## 数值入口与边界
 
