@@ -59,7 +59,7 @@ E2M1 整数格为解码值乘二的精确整数。正负零都变成整数零，
 
 官方落点需按路径区分：Engram `model.py:319–320`、转换器 `convert.py:157–173` 的 wo_a 路径有明确 BF16 落点；KV/SWA 的 inplace 量化回写输入 dtype（`kernel.py:82–86,167–172`）；专家 `kernel.py:538–553` 是 FP4→FP32→FP8 后 GEMM，再对累加值应用 scale。[代码] 不能从逐元素反量化验收推出移动 scale、提前 BF16 舍入或整数点积改写的等价性。
 
-本 oracle 不证明有损量化、scale 生成、动态 KV 量化、GPU cast/FTZ、kernel parity、checkpoint 转换或端到端模型一致，也不替代 `src/quant` 或 K-Q1～K-Q3 的引擎实现验收。独立计算分支契约见 [COMPUTE](COMPUTE.md)，不是逐元素 dequant 的已验证后继；各路径的 parity 参照见 [MODEL §4](MODEL.md#4-精确性链条)。
+本格式/给定 scale 反量化 oracle 不证明有损量化或 scale 生成；模型实际 BF16 激活动态量化的独立 CPU 契约见 [ACTQUANT](ACTQUANT.md)。动态 KV 量化、GPU cast/FTZ、kernel parity、checkpoint 转换与端到端模型一致仍不在本页范围，也不替代 `src/quant` 或 K-Q1～K-Q3 的引擎实现验收。独立计算分支契约见 [COMPUTE](COMPUTE.md)，不是逐元素 dequant 的已验证后继；各路径的 parity 参照见 [MODEL §4](MODEL.md#4-精确性链条)。
 
 ## 6. 生产 C++ codec（`src/quant`）
 

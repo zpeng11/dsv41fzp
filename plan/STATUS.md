@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-**开发阶段初期：格式 oracle、CPU-only C++ 构建、生产 quant codec、给定 scale 反量化基线与专家分组点积 CPU 规范参照及其生产 C++ scalar 基线已建立。** [P0013](p0013-expert-grouped-dot-scalar.md) 的技术验收、干净检出复现、知识归档与用户评审通过，已结项；同契约快路径尚未立项。 推理引擎与完整 FP32 模型 oracle 尚未实现，没有目标机验证或引擎性能基线，不处于可部署阶段。
+**开发阶段初期：格式 oracle、CPU-only C++ 构建、生产 quant codec、给定 scale 反量化基线、专家分组点积 CPU 规范参照及其生产 C++ scalar 基线与动态激活量化 CPU 规范参照已建立。** [P0013](p0013-expert-grouped-dot-scalar.md) 与 [P0014](p0014-act-quant-oracle.md) 的技术验收、干净检出复现、知识归档与用户评审均通过，已结项；同契约计算/激活量化快路径与生产激活量化尚未立项。 推理引擎与完整 FP32 模型 oracle 尚未实现，没有目标机验证或引擎性能基线，不处于可部署阶段。
 
 ## 当前工作项
 
@@ -18,7 +18,8 @@
 - **已验收的生产入口**：`df_quant`，公共头 `include/df/quant/codec.h` 与 `dequant.h`；接口、布局、失败与环境契约见 [QUANT §6～§7](../docs/QUANT.md#6-生产-c-codecsrcquant)，证据见 [P0010](p0010-quant-scalar-baseline.md#收尾)、[P0011](p0011-quant-dequant-scalar.md#收尾)。它们覆盖格式 codec 与六类给定 scale 的逐元素反量化，不是 GEMM、累加后乘 scale、整数点积或提前 BF16 舍入的参照，不表示 K-Q1～K-Q3 全部完成。
 - **已验收的计算参照**：`ref/compute.py`，必选命令 `python3 tests/quant/test_compute.py`，CTest 入口 `quant.compute`。单输出专家 FP8×packed FP4、双方每 32 元素分组的 CPU 契约见 [COMPUTE](../docs/COMPUTE.md)，复现入口见 [BUILD](../docs/BUILD.md#7-测试清单)，证据见 [P0012](p0012-expert-grouped-dot-oracle.md#收尾)。它只供同契约后续实现对照，不直接验收 K-E1/K-E2 或官方 GPU，路由见 [MODEL §4](../docs/MODEL.md#4-精确性链条)。
 - **已验收的生产计算**：`df_quant` 公共头 `include/df/quant/compute.h`，入口 `expert_grouped_dot`；接口、失败、环境与验证边界见 [COMPUTE §6](../docs/COMPUTE.md#6-生产-c-scalarsrcquant)，CTest 入口 `quant.compute.{parity,contract,add,harness}` 见 [BUILD §7](../docs/BUILD.md#7-测试清单)，证据见 [P0013](p0013-expert-grouped-dot-scalar.md#收尾)。同契约快路径只对照它，它不直接验收 K-E1/K-E2 或官方 GPU。
-- **仍未覆盖**：同契约计算快路径、K-E1 同路径参照与跨路径质量偏差、整数改写及 scale 折叠、有损编码/scale 生成、动态量化、SIMD/CUDA、GPU cast/FTZ、官方 GPU parity 与双 arch 端到端一致尚未立项。W4A16 decode 默认规划不变。
+- **已验收的动态激活量化参照**：`ref/act_quant.py`，入口 `act_quant` 与 `trace_act_quant`；单行 BF16→E4M3FN+E8M0 CPU 契约见 [ACTQUANT](../docs/ACTQUANT.md)，复现命令 `python3 tests/quant/test_act_quant.py`，CTest 入口 `quant.act_quant` 见 [BUILD §7](../docs/BUILD.md#7-测试清单)，证据见 [P0014](p0014-act-quant-oracle.md#收尾)。它是后续同契约生产 scalar 的上一级，不直接验收 K-X1 kernel、K-E1/K-E2 或官方 GPU，路由见 [MODEL §4](../docs/MODEL.md#4-精确性链条)。
+- **仍未覆盖**：生产动态激活量化、其他有损编码/scale 生成、动态 KV 量化、同契约计算快路径、K-E1 同路径参照与跨路径质量偏差、整数改写及 scale 折叠、SIMD/CUDA、GPU cast/FTZ、官方 GPU parity 与双 arch 端到端一致尚未立项。W4A16 decode 默认规划不变。
 
 ## 其他入口与阻塞
 
