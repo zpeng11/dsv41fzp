@@ -1,6 +1,6 @@
 # BUILD.md — CPU-only 构建与测试契约
 
-本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)、[P0010](../plan/p0010-quant-scalar-baseline.md)、[P0011](../plan/p0011-quant-dequant-scalar.md)、[P0012](../plan/p0012-expert-grouped-dot-oracle.md) 与 [P0014](../plan/p0014-act-quant-oracle.md)；计算与动态激活量化参照契约分别见 [COMPUTE](COMPUTE.md)、[ACTQUANT](ACTQUANT.md)，状态不在本页记录。
+本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)、[P0010](../plan/p0010-quant-scalar-baseline.md)、[P0011](../plan/p0011-quant-dequant-scalar.md)、[P0012](../plan/p0012-expert-grouped-dot-oracle.md)、[P0014](../plan/p0014-act-quant-oracle.md) 与 [P0016](../plan/p0016-checkpoint-inventory.md)；计算与动态激活量化参照契约分别见 [COMPUTE](COMPUTE.md)、[ACTQUANT](ACTQUANT.md)，状态不在本页记录。
 
 **来源标记**：**[D]** D0005/D0007 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
 
@@ -101,6 +101,7 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.compute.add` | 同一生产 FP32 加法 helper 的私有连接，定向舍入与 sticky 边界加固定种子补充 |
 | `quant.compute.harness` | 计算协议、trace 形状、超宽 token、未知输出模式、加毒有效性与执行器故障均传播到进程退出 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
+| `tools.ckpt_inventory` | `tests/tools/test_ckpt_inventory.py`：合成 safetensors 上的每类结构与 index 拒绝、预期比对的缺失/多余/dtype/shape 检出、小配置的手算张量计数与 shape 抽查、扫描计数与逐元素朴素计数一致且不随分块与进程数变化 |
 
 计算参照与动态激活量化参照的全部必选验收也可单独运行；从源码目录外运行时使用脚本绝对路径。两者仅依赖标准库，不初始化 Torch/TileLang/CUDA，不依赖目标机、权重、设备 dump 或网络；错误结果、异常或 skip 使命令非零退出。验证方法与契约分别以 [COMPUTE](COMPUTE.md) 与 [ACTQUANT](ACTQUANT.md) 为唯一来源。[代码][实测]
 
@@ -108,6 +109,15 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_compute.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_act_quant.py
 ```
+
+**真实 checkpoint 核对**不进 CTest（依赖本机快照与约 510 GB 数据），在仓库根目录执行；`<snapshot>` 为 HF 快照目录，本机为 `/mnt/pfs/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/2cba9e42aa026125f3ed06c6d98c1db82f7ca027`。[代码][实测]
+
+```bash
+python3 tools/ckpt_inventory.py <snapshot> --json build/ckpt.json --inventory build/ckpt.tsv
+python3 tools/ckpt_inventory.py <snapshot> --scan --jobs 96 --progress --json build/ckpt-scan.json
+```
+
+第一条核对配置文件与镜像逐字节相同、shard 结构、index 与独立预期；第二条另做全量编码扫描，读完全部载荷，`--jobs` 按可用核心设置。退出码 0 表示全部检查通过，1 表示有检查失败，2 表示用法或 I/O 错误；JSON 与 TSV 是生成物，写入 git-ignore 的 `build/` 或 `scratch/`。结构规则 pin 于 `huggingface/safetensors@e246a256`；预期只由 `third_party/reference/inference/config.json` 与官方构造代码生成，每条规则的源码行号随 TSV 输出。工具仅依赖标准库，要求小端主机，码点分类经 `ref/formats`。结果归档于 [MODEL §2](MODEL.md#2-结构与格式) 的 [ckpt] 事实。[代码][实测]
 
 `quant.compute` 与 `quant.act_quant` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
 

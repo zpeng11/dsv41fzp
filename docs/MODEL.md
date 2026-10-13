@@ -3,8 +3,8 @@
 **本页是模型事实的单一引用源。** 其他文档、代码注释、AGENTS.md 引用模型数字时一律指向本页，不得另立数字。
 
 **来源标记**：
-- **[卡]** HF 模型卡 · **[cfg]** 官方 `config.json` · **[代码]** 官方 `inference/` 参考实现（repo commit `93cb8a5`，本地镜像 `third_party/reference/`，见其 PROVENANCE.md）· **[报告]** 官方技术报告 arXiv:2609.19969 · **[算]** 推导算术（附式可复核）· **[待]** 待确认（附途径）
-- 权威序：代码 > 报告 > 模型卡（三者冲突时以代码为准并在此页标注）
+- **[卡]** HF 模型卡 · **[cfg]** 官方 `config.json` · **[代码]** 官方 `inference/` 参考实现（repo commit `93cb8a5`，本地镜像 `third_party/reference/`，见其 PROVENANCE.md）· **[报告]** 官方技术报告 arXiv:2609.19969 · **[ckpt]** 官方 checkpoint 实测：HF 快照 `2cba9e42`（48 shard），经 `tools/ckpt_inventory.py` 解析全部 shard 头部并扫描全部张量的原始编码（方法与命令见 [BUILD §7](BUILD.md#7-测试清单)，证据见 [P0016](../plan/p0016-checkpoint-inventory.md)）· **[算]** 推导算术（附式可复核）· **[待]** 待确认（附途径）
+- 权威序：代码 > 报告 > 模型卡（三者冲突时以代码为准并在此页标注）；checkpoint 的存储 dtype、shape 与字节数以 [ckpt] 为准
 
 ---
 
@@ -17,32 +17,36 @@
 | 层数 / hidden | 40 / 5120；词汇表 129280 | [cfg] |
 | 注意力 | 64 头 × head_dim 512（qk_rope 64）；KV 为 MQA 式共享 latent；q_lora 1280 / o_lora 1024 / **o_groups 8（块对角分组，见 K-A4）** | [cfg][代码] |
 | 上下文 | 训练 64K，YaRN factor 16 外推至 1,048,576（theta 10000）；4K→1M decode FLOPs 仅增约 1/4 | [卡][cfg][报告] |
-| MoE | 每层 1 共享专家 + 384 路由专家（激活 6）；moe_intermediate 2304；专家张量共 47,232 个（backbone 46,080 + DSpark 1,152） | [cfg][代码] |
+| MoE | 每层 1 共享专家 + 384 路由专家（激活 6）；moe_intermediate 2304；专家张量共 47,232 个（backbone 46,080 + DSpark 1,152） | [cfg][代码][ckpt] |
 | 残差流 | **mHC 超连接：4 份并行残差拷贝（hc_mult 4）+ Sinkhorn 平衡的 4×4 混合矩阵（hc_sinkhorn_iters 20）——推理期每 token 每子层都执行，非训练专用**（详见 §2.8） | [代码][报告] |
 | 投机解码 | DSpark：3 个 nextn 层（40–42），各带 128 专家 MoE（激活 3）、SWA 128；Markov 头 rank 256；block size 5；noise token 128799 = `<｜System｜>` 特殊 token（详见 §2.7） | [cfg][代码] |
-| 多模态 | 32 层 ViT（hidden 1024，patch 14，≤1024 image tokens），权重 BF16 在 shard 1；kernel 见 K-V1** | [cfg][代码] |
+| 多模态 | 32 层 ViT（hidden 1024，patch 14，≤1024 image tokens），权重 BF16；视觉塔与 aligner 独占 shard 1，图像分隔嵌入 `image_start/end/newline` 在 shard 2；kernel 见 K-V1 | [cfg][代码][ckpt] |
 
 ## 2. 结构与格式
 
 ### 2.1 权重分量格式表
 
+格式列是 checkpoint 的存储 dtype；运行时 dtype 不同者在格式列注明。
+
 | 分量 | 格式 | 规模 | 来源 |
 | --- | --- | --- | --- |
-| 路由专家 w1/w2/w3（backbone + DSpark 层） | **E2M1 以 int8 打包**（`[out, in/2]`，沿 K 每字节 2 值）+ **UE8M0 scale `[out, in/32]`**（即 MXFP4 权重结构） | ≈555.5B 元素 → **≈302 GB** | [代码] convert.py:174、config `expert_dtype: fp4` |
-| **Engram 两张表**（层 1、14） | **FP8 E4M3 `[rows, 256]` + E8M0 scale `[rows, 8]`**；行数 384,006,168 / 384,016,682 | **≈202.8 GB，占 checkpoint 39.7%**（各独占 shard 47/48） | [代码] model.py:307 |
-| 注意力 wq_a/wq_b/wkv/wo_a/wo_b、共享专家、indexer.wq_b、engram.wkv、mtp.main_proj | FP8 E4M3 + UE8M0，块 32×32 | ≈7.4 GB | [代码] |
-| indexer.wk、weights_proj、compressor.wkv(r=1)、embed/head、markov embed/head、视觉塔、aligner | BF16 | ≈4 GB | [代码] |
-| compressor wkv(r>1)/wgate、hc_\*、attn_sink、gate.bias/bias_vl、engram q/k_weight | FP32（confidence proj 在 ckpt 为 BF16） | ≈42M 元素 | [代码] |
+| 路由专家 w1/w2/w3（backbone + DSpark 层） | **E2M1 以 int8 打包**（`[out, in/2]`，沿 K 每字节 2 值）+ **UE8M0 scale `[out, in/32]`**（即 MXFP4 权重结构）；运行时视为 `float4_e2m1fn_x2` | 557,171,343,360 个 FP4 值 → **296.00 GB**（打包权重 278.59 + scale 17.41） | [ckpt]；[代码] convert.py:174–181、config `expert_dtype: fp4` |
+| **Engram 两张表**（层 1、14） | **FP8 E4M3 `[rows, 256]` + E8M0 scale `[rows, 8]`**；行数 384,006,168 / 384,016,682 | **202.76 GB，占 checkpoint 39.7%**；各与本层 `engram.wkv`、`q/k_weight` 同在 shard 47/48，两 shard 不含其他张量 | [ckpt]；[cfg]；[代码] model.py:307 |
+| 注意力 wq_a/wq_b/wkv/wo_a/wo_b、共享专家、indexer.wq_b、engram.wkv、mtp.main_proj | FP8 E4M3 + UE8M0，块 32×32；`wo_a` 由转换器反量化为 BF16 后运行 | 7.41 GB | [ckpt]；[代码] convert.py:157–173 |
+| indexer.wk/weights_proj/k_norm、compressor wkv/wgate/norm、engram q/k_weight、embed/head、markov embed/head、confidence proj、视觉塔、aligner、各 RMSNorm | BF16；compressor wkv(r>1)/wgate、head、markov head、confidence proj 与视觉塔 RMSNorm 运行时构造为 FP32，加载时拓宽 | 3.95 GB | [ckpt]；[代码] model.py:444–448,1005–1006,1092；vision.py:28 |
+| hc_\*、attn_sink、gate.bias/bias_vl | FP32 | 42,307,282 元素（0.17 GB） | [ckpt] |
 | 运行时激活 | FP8 E4M3 dynamic + UE8M0 | — | [cfg] |
+
+**全量编码扫描** [ckpt]：E4M3 与 E8M0 中没有 NaN 编码，BF16 与 FP32 中没有 NaN/Inf。E8M0 scale 编码范围 109–128（2^−18～2^1），其中路由专家 scale 为 115–128。路由专家的 E2M1 码点 8（负零）共 32,765,814,399 个，占全部 FP4 值的 5.88%，与码点 0（32,766,317,383 个）数量相当，因此 [QUANT §2](QUANT.md#2-位模式与零符号) 所述 `ref/` 与官方 FP4_TABLE 的零符号差异在真实权重中普遍出现。DSpark 层的 `gate.bias`/`bias_vl` 全为 +0。
 
 ### 2.2 体积核算与内存预算
 
-checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + engram 表 203 + 其余 FP8 7.4 + BF16 ≈4 GB ✓（字节核算残差 0.08% [代码]）
+checkpoint 总量 **510.29 GB / 48 shard** [卡][ckpt]；分解：专家 FP4 296.00 + engram 表 202.76 + 其余 FP8 7.41 + BF16 3.95 + FP32 0.17 = 510.29 GB，与 index 的 `total_size`（510,286,023,000 字节）逐字节相等 [ckpt]
 
-**[算] 分层预算的硬事实**：专家 302GB + engram 203GB = **505GB，单独这两项已超过 500GB RAM** →
-- 非专家热路径（FP8+BF16 ≈11GB）全部常驻 VRAM，无压力；
+**[算] 分层预算的硬事实**：专家 296.0GB + engram 202.8GB = **498.8GB，500GB RAM 上仅余约 1.2GB，装不下系统与其余常驻项** →
+- 非专家热路径（FP8+BF16 ≈11.4GB）全部常驻 VRAM，无压力；
 - **NVMe 兜底是必需**，或 engram 行级缓存（每 token 仅 24 行×2 层 ≈ 12.7KB 随机读，行访问呈 Zipf 分布，热点行缓存可行性是 bench 议题）；
-- VRAM 预算（160/192/320/384GB）对 302GB 专家热集分层不变。
+- VRAM 预算（160/192/320/384GB）对 296GB 专家热集分层不变。
 
 ### 2.3 数值格式速查（`src/quant/` 规格）
 
@@ -236,6 +240,7 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
 | `ref/compute.py` | [COMPUTE §1～§4](COMPUTE.md#1-来源与参照边界) | 生产专家分组点积 | 逐元素 dequant 的后继、K-E1 W4A16、K-E2 整数改写、scale 生成 |
 | `df_quant` 专家分组点积 | [COMPUTE §6](COMPUTE.md#6-生产-c-scalarsrcquant) | 同契约计算快路径 | 同 `ref/compute.py` 行 |
 | `ref/act_quant.py` | [ACTQUANT](ACTQUANT.md) | 同契约生产激活量化 scalar | K-X1 kernel、inplace/KV 量化、`fp4_act_quant`、K-E1/K-E2、完整专家 MLP |
+| `tools/ckpt_inventory.py` | 本页 §2.1～§2.2 的 [ckpt] 事实；运行方法见 [BUILD §7](BUILD.md#7-测试清单) | 未来 `src/artifact` 读取器的张量清单 | 码点统计以外的数值语义、pack 格式与转换、读取性能、其他快照 |
 
 全部条目均不覆盖 SIMD/CUDA、官方 GPU 逐位等价、checkpoint 转换、K-E1 质量偏差与端到端一致；验证环境限 [BUILD §1](BUILD.md#1-支持环境) 的 ENV-A。
 
