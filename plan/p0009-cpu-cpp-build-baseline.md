@@ -3,7 +3,7 @@ id: P0009
 title: 建立 CPU-only C++ 构建与测试基线
 status: completed
 created: 2026-10-10
-updated: 2026-10-11
+updated: 2026-10-13
 knowledge: updated
 docs: [docs/BUILD.md]
 bench: []
@@ -13,65 +13,45 @@ followups: []
 
 ## 意图
 
-在实现生产 `src/quant` 前，建立可独立验收的第一套 C++ 构建与测试入口，明确工具链、target 边界、数值编译前提和版本元数据刷新规则。成功标准是无需 CUDA 或模型权重即可从干净检出完成配置、构建和测试，且后续 quant 能直接接入同一入口；不是交付推理引擎、量化实现或完整基础设施。
-
-本项承接 P0006 之后的工程前置缺口，不接收 P0006 的未完成义务。CMake 读取 VERSION、构建时 dirty 后缀、生成物不入库及官方镜像不参与构建沿用既有规则；下述新增选择是待评审的设计提案，不以建立 draft 视为新决策已接受。先评审构建契约，再启动实现；本次仅落盘设计。
+在实现生产 `src/quant` 前，建立可独立验收的第一套 C++ 构建与测试入口，明确工具链、target 边界、数值编译前提和版本元数据刷新规则。成功标准是无需 CUDA 或模型权重即可从干净检出完成配置、构建和测试，且后续 quant 能直接接入同一入口；不交付推理引擎、量化实现或完整基础设施。
 
 ## 验收
 
-- [x] **CPU-only、离线与独立构建**：干净检出后按归档命令完成配置、构建和 CTest；不寻找 CUDA toolkit、不初始化 GPU、不要求 Torch/TileLang、模型权重或目标机。普通 configure/build/test 不联网、不隐式下载工具或依赖，已有工具缺失时明确失败并指出前置条件。源码树不产生构建文件，生成物留在忽略的 build 目录，官方镜像不作为编译或链接依赖。
-- [x] **可判定的首个支持环境**：记录实际 CMake/CTest、生成器、C++ 编译器、Python、CPU/平台、编译选项与命令；实际使用 C++20 编译并链接 smoke 库与消费者。首批支持声明只覆盖本项实测配置，不从单一工具链通过推出其他编译器、旧版依赖、其他操作系统或未来 NVCC 支持；依赖版本下界的声明须有对应证据。
-- [x] **target 边界真实可用**：测试目录中的极小 C++ 库及测试消费者构成跨 translation unit 编译、链接验证，消费者链接该库而非包含其源文件。include、语言要求、编译/链接选项与依赖均按 target 管理；通过编译命令及对照 target 验证数值选项不污染无关 target。项目受控的通用 target 默认无 fast-math、全局 native ISA 或无依据的 exceptions/RTTI 禁用；不生成占位业务模块。
-- [x] **数值编译前提可检查**：数值基线 target 在 Debug 和 Release 下显式禁用 fast-math 与浮点收缩；用运行时输入的 smoke 检查 binary32 前提、RNE 环境、正负零与渐进下溢，不以常量折叠结果冒充运行证据。临时反例能识别舍入环境或 FTZ/DAZ 条件不符合要求；异常环境明确失败，不静默接受。用户传入的矛盾选项不得无声破坏严格 target，处理策略和生效选项须可审计。此项只验证构建前提，不替代 quant 的格式/乘法/舍入 parity，也不新增软件浮点实现。
-- [x] **统一测试与失败传播**：CTest 必选注册 C++ smoke、现有 `tests/quant/test_formats.py` 和 `tests/tools/test_check_repo.py`；任一失败均使统一入口非零退出。Python 解释器路径显式传入，不猜测 build 路径；从源码目录外运行 CTest 仍可定位源码。缺少必选执行器/依赖不能 skip 后报通过，临时失败注入须验证失败能传到 CTest。
-- [x] **开发配置**：CPU Debug 与 Release 配置有明确入口，均运行全部必选测试。
-- [x] **版本信息构建时刷新**：每次 build 读取 VERSION、HEAD SHA 与 dirty 状态，产物可读取三者；显示版本只在 dirty 时加 `+dirty`，不把后缀写回 VERSION。状态未变时不触发重编。在工作仓库中验证：干净时 configure 并 build 无后缀；修改已跟踪文件后只 build、不重跑 configure，读到 `+dirty`；撤销修改再 build，后缀消失。
-- [x] **知识、治理与人工收尾**：构建契约、命令、支持环境、版本刷新策略与边界归档到 docs；长期选择的理由形成用户确认的 D 条目，必要知识不得仅留在本计划。现有 Python 验收、仓库检查与合入前提交范围审计通过，证据回填本项；用户评审通过后才结项，同步 STATUS 与真实剩余义务。不得把本项完成写成 quant、CUDA 或部署资质已验收。
+- [x] **CPU-only、离线与独立构建**：干净检出按归档命令完成 configure/build/CTest；不寻找 CUDA、不要求 Torch/TileLang、权重或目标机；不联网、不隐式安装，工具缺失明确失败；生成物只在忽略的 build 目录，官方镜像不参与构建。
+- [x] **可判定的首个支持环境**：记录实际工具链、平台、选项与命令，以 C++20 编译链接 smoke 库与消费者；支持声明只覆盖实测配置。
+- [x] **target 边界真实可用**：跨 TU 库与消费者链接验证；include、语言、选项按 target 管理，编译命令证明数值选项不污染无关 target；无 fast-math、全局 native ISA 或无依据的 exceptions/RTTI 禁用；无占位业务模块。
+- [x] **数值编译前提可检查**：Debug/Release 均禁用 fast-math 与收缩；运行时检查 binary32、RNE、正负零与渐进下溢，反例能识别舍入环境与 FTZ/DAZ；矛盾选项不得无声破坏严格 target。不替代 quant parity。
+- [x] **统一测试与失败传播**：CTest 注册 C++ smoke、`test_formats.py` 与 `test_check_repo.py`；解释器路径显式传入，源码目录外可运行；缺依赖不 skip，失败注入传到 CTest。
+- [x] **开发配置**：CPU Debug 与 Release 入口均运行全部必选测试。
+- [x] **版本信息构建时刷新**：每次 build 读取 VERSION、SHA、dirty，仅 dirty 时加 `+dirty` 且不写回；状态不变不重编；干净、改动后只 build、撤销三态演练成立。
+- [x] **知识、治理与人工收尾**：契约归档 docs，理由形成 D；回归、仓库检查与范围审计通过；用户评审后结项，不写成 quant、CUDA 或部署资质已验收。
 
 ## 记录
 
-### 拟议构建契约
+### 范围与依据
 
-以下构建契约的长期选择已由 D0005 接受；评审如改变验收范围，须先确认并更新本项，不在实现过程中静默扩大支持矩阵。
-
-- **平台与工具链**：首个验收环境为 Linux x86_64、GCC；以本机 GCC 15.2.0 与 Python 3.12.8 为首轮候选，不以它们推导未来最低 GCC/Python 版本。宿主 C++ 标准拟定 C++20，关闭编译器专有语言扩展；这不批准未来 CUDA translation unit 的语言标准。CMake 3.24 为拟议配置版本门槛，CTest 与 CMake 同发行，Ninja 为首轮生成器；实测版本另行记录，未经验证不声称门槛版本已获支持。CMake、CTest 与 Ninja 装入运行测试的同一 conda 环境（经 conda 或 pip，同一工具不混用两种来源），安装命令与实际版本归档到 BUILD；构建本身不自动安装，本项不做容器体系。
-- **target 组织**：根 CMake 入口只建立必要构建规则和测试接线，源文件显式列举。可复用的语言/告警设置、严格数值设置、版本元数据分别组织，按需附到 target，不通过全局 CXX flags、include_directories 或全仓 ISA 设置传递。语言需求仅在公共头确有要求时传播给消费者；数值选项不作为无关消费者的隐式接口。严格数值选项在首轮 GCC 下拟用 `-fno-fast-math`、`-ffp-contract=off`，实际生效与运行环境通过验收证明，而非仅检查配置文本。
-- **构建配置**：拟提供 `cpu-debug`、`cpu-release` 两个 preset，二进制目录位于 `build/<preset>`。没有 CUDA 目标时不启用 CUDA 语言，不为未来后端制造假 target 或开关。
-- **测试连接**：使用 CTest 和 Python 标准库，不新增第三方 C++ 测试框架或 pybind11。smoke 库与消费者仅放在 `tests/cpu/build_baseline/`，用于证明编译、链接与版本元数据；不放入 `src/quant`、公共业务头或虚假的引擎入口。Python 调用 C++ 的连接方式随首个 quant parity 数据协议一并设计，本项不预设。
-- **版本元数据**：版本来源遵守 D0001 和 AGENTS.md。每次 build 由始终执行的自定义 target 查询 Git 状态，内容变化才改写生成头，生成头只被单个版本 TU 包含；生成元数据不入源码树。dirty 拟按 Git 已跟踪改动（含暂存）与非忽略未跟踪文件判定，忽略的 build/scratch 不算 dirty。未在可识别 Git 检出中构建时明确拒绝，不伪造 clean 或 SHA。测试进程打印版本信息，未来引擎启动日志的消费责任不由本项冒充完成。
-- **范围内接线**：现有 Python oracle 和治理回归进入 CTest，不修改 `ref/`、官方镜像或现有测试的数值语义。工作树检查与提交范围审计仍按既有流程独立执行。拟议根目录命令为 `cmake --preset cpu-debug`、`cmake --build --preset cpu-debug`、`ctest --preset cpu-debug --output-on-failure`；其他配置对应替换 preset。这些命令是交付目标，当前尚不能运行。
-- **提交追溯**：构建与测试基线实现拟沿用现有仓库级 `ci` area，subject 为 `P0009 ci: <论断句>`；计划和知识提交分别使用 plan/docs area，不新增 build/cpp/test area，不为本项修改执法规则。这里的 ci 表示构建与测试集成，不表示已接通远端 CI。实现仍走 `p0009-cpu-cpp-build-baseline` 短命分支与既有合入流程，不以 `meta:` 代替带 P 编号的行为及验收论断。
-
-### 范围与执行顺序
-
-- 范围内：最小 CMake/CTest 与 preset、测试侧 C++ 编译链接工件、现有 Python 测试接线、严格数值前提的正反例、版本构建时刷新和必要知识归档。构建本身不产生模型格式版本，也不手工递增引擎 VERSION。
-- 范围外：生产 quant/C++ 业务 API、通用 Tensor/graph、CUDA 版本矩阵及 sm80/sm120 策略、SIMD 分派或 native 优化、真实权重和 pack、依赖管理框架、安装导出/稳定 ABI、部署容器、全套 CI/bench/发布体系、性能基线和 P0005 目标机认证。以下在评审中移出本项：AddressSanitizer/UndefinedBehaviorSanitizer 检查配置、Python 调用 C++ 的执行器探针、版本信息的临时 Git 仓库状态矩阵（HEAD/VERSION 变化、暂存、未跟踪与忽略文件等组合）。未验证的扩展留待相应后续 P，不在本项提前占号。
-- 拟议顺序：长期选择已由 D0005 接受；先完成 CPU 构建及 smoke；接入统一测试与版本刷新；运行各配置及临时正反例；最后归档知识、人工评审和结项。
-- 后续 quant P 使用本项构建入口实现 scalar，并另行对照 `ref/` 验收；不因构建测试通过宣称 K-Q1～K-Q3 完成。P0005 仍需 CUDA 探针、目标机与实验前置，本项 CPU-only 交付不解除这些阻塞。必要构建知识缺失阻塞本项结项；明确范围外的未来工作不自动视为移交义务。
-- 知识拟归档到 `docs/BUILD.md`，只收当前真实构建契约、操作和支持证据，不重复量化规格或保存状态；长期选择的理由留 D，过程与验收指针留本项。经用户确认已写入，README 路由同步增加构建入口。未来 docs/决策内容写入按规则确认；本项不修改 AGENTS.md，填充其构建路由另须用户明确授权。
-
-### 设计记录
-
-- 2026-10-10：用户同意将 CPU-only C++ 构建与测试基线作为 P0009，并要求写设计。新增本 draft 与 STATUS 路由，未安装工具、实现构建、创建已接受决策或运行 C++ 验收；不提交或改变 VERSION。
-- 2026-10-10：只读环境探测：Linux 5.15.0-72-generic x86_64 / glibc 2.43；GCC `g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0`；Python 3.12.8（conda-forge，GCC 13.3.0）。PATH 中未找到 CMake、CTest、Ninja 或 Clang；这是开工环境缺口，不是已通过的工具链支持证据。普通构建不自动补装，编码前显式准备并记录实际工具版本。
-- 2026-10-10：用户评审确认裁剪范围：移出 sanitizer 配置、Python 调用 C++ 探针与版本增量刷新矩阵，版本信息收窄为 configure 注入并验证干净/dirty 两态。工具提供方式（系统包或 Python 环境）未定，留待 D 条目讨论。
-- 2026-10-10：起草 [D0005](decisions/d0005-cpu-build-toolchain.md)（proposed），含本机 GCC 15.2.0 FMA 收缩探测；工具来源与 dirty 判定时机待用户选定，接受前不开始实现。
-- 2026-10-10：用户选定工具由 conda/pip 管理、dirty 在构建时判定；版本信息验收改为构建时刷新，仍只验证干净与 dirty 两态，状态组合矩阵保持移出。
-- 2026-10-10：用户接受 D0005 并授权推进；P0009 翻转为 active，实现走 `p0009-cpu-cpp-build-baseline` 分支。
+- 依据 [D0005](decisions/d0005-cpu-build-toolchain.md)（GCC/Linux x86_64、C++20、conda/pip 工具、`cpu-debug`/`cpu-release` preset、构建时 dirty 判定）；契约见 [BUILD](../docs/BUILD.md)。
+- 范围外：生产 quant、CUDA、SIMD/native、pack、安装/ABI、CI/bench 全套、P0005；评审中移出 sanitizer 配置、Python 调用 C++ 探针与版本状态组合矩阵。
 
 ### 验收证据
 
-环境：Intel Xeon Platinum 8350C 双路（FMA/AVX-512F/AVX-512 VNNI），Ubuntu 26.04 LTS，Linux 5.15.0-72-generic x86_64；`g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0`；CMake/CTest 4.4.4 与 Ninja 1.13.2 均经 `pip install cmake ninja` 装入 `/root/miniforge`（Python 3.12.8）；Git 2.54.0。实现提交为分支上的 `P0009 ci: 建立 CPU-only CMake/CTest 构建与测试基线`。
+- 环境：ENV-A（[BUILD §1](../docs/BUILD.md#1-支持环境)）。
+- `cpu-debug`/`cpu-release` 各 8/8，零告警；`/tmp` 下 `ctest --test-dir` 与全新克隆 `cpu-release` 均 8/8，克隆仅见 `build/`。
+- 收缩探针（`-O2 -mfma`）：严格版 `0x0p+0`，`-ffp-contract=fast` 对照版 `0x1p-24`；`bb_fp_env` 在 FE_UPWARD、FTZ、DAZ 下均识别违规。
+- 失败路径：`-ffast-math` 与 `CXXFLAGS=-ffp-contract=fast` configure FATAL_ERROR；不存在的 Python 解释器 configure 失败；非 Git 目录 build 失败；注入 `SystemExit` 与错误 smoke 期望时 CTest 返回 8。
+- 版本刷新：`0.1.7` → 改动后只 build 得 `0.1.7+dirty` 且仅重编 `version.cpp` → 撤销后恢复。
+- 未演练：非 GCC 与非 Linux x86_64 的拒绝分支。
 
-- 构建与测试：`cpu-debug`、`cpu-release` 均按 `cmake --preset` / `cmake --build --preset` / `ctest --preset` 完成，8/8 通过，构建零告警；从 `/tmp` 用 `ctest --test-dir` 运行同样 8/8。全新本地克隆跑 `cpu-release` 8/8，`git status --ignored` 仅见 `build/`。CMakeCache 无 CUDA 项。
-- 注册的测试：`bb.smoke`（静态库与消费者跨 TU 链接）、`bb.version`、`bb.fp_env`、`bb.contract.strict`、`bb.contract.fast_control`、`bb.compile_flags`、`quant.formats`、`tools.check_repo`。
-- 数值前提：`bb_fp_env` 在默认环境下通过 RNE、正负零、次正规输出与输入、MXCSR FTZ/DAZ 位检查，并在进程内切到 FE_UPWARD、FTZ、DAZ 后对应检查均识别违规。收缩探针固定 `-O2 -mfma`：严格版得 `0x0p+0`，`-ffp-contract=fast` 对照版得 `0x1p-24`。`bb.compile_flags` 从 `compile_commands.json` 验证严格选项只出现在 `bb_fp_env`、`bb_contract_strict`，无关 target 无严格选项与 `-mfma`，全部 target 为 `-std=c++20`、无 fast-math 与 `-march`。
-- 开发中发现：`-O0` 下运行时计算的期望值（`std::ldexp`）同样受 FTZ 影响，使 FTZ 反例被掩盖；改为十六进制字面量后反例生效。
-- 矛盾选项：`-DCMAKE_CXX_FLAGS="-O2 -ffast-math"` 与 `CXXFLAGS=-ffp-contract=fast` 均在 configure 时 FATAL_ERROR。
-- 缺失前提：`-DPython3_EXECUTABLE=/nonexistent/python3` configure 失败；非 Git 目录中 configure 成功但 build 在版本生成步骤失败，不伪造 SHA。
-- 失败传播：临时在 `test_formats.py` 首行注入 `SystemExit` 及临时改错 smoke 期望值，CTest 均返回 8；恢复后通过，工作树无残留。
-- 版本刷新（工作仓库，干净树）：configure+build 显示 `0.1.7`、dirty=0；不改动再 build 只执行刷新步骤、无重编；追加一行到 `README.md` 后只 build，重编 `version.cpp` 并显示 `0.1.7+dirty`，`bb.version` 通过；撤销后 build 恢复 `0.1.7`。
-- 未验证：非 GCC 编译器与非 Linux x86_64 平台的拒绝分支（本机无 Clang，未演练）。
+### 评审处置
+
+- 2026-10-10：用户裁剪范围（见上）；选定 conda/pip 工具与构建时 dirty；接受 D0005，转 active。
+- 开发中发现：`-O0` 下运行时计算的期望值同样受 FTZ 影响而掩盖反例，改为十六进制字面量。
+- 2026-10-11：用户评审通过并授权合入。
+
+### 提交
+
+- `afedb16` 实现；合并提交同步结项、STATUS 与 VERSION 0.1.8。
+- 压缩前全文见提交 `b60526d`（依 [D0011](decisions/d0011-doc-single-source.md) 压缩）。
 
 ## 收尾
 
