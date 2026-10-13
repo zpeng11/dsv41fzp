@@ -1,11 +1,11 @@
 ---
 id: P0015
 title: 按 D0011 将 docs 与 plan 收敛为单一来源并压缩已结项 P 记录
-status: active
+status: completed
 created: 2026-10-13
 updated: 2026-10-13
-knowledge: pending
-docs: []
+knowledge: updated
+docs: [docs/MODEL.md, docs/BUILD.md, docs/QUANT.md, docs/COMPUTE.md, docs/ACTQUANT.md]
 bench: []
 decisions: [D0011]
 followups: []
@@ -23,9 +23,9 @@ followups: []
 - [x] **契约去重**：QUANT §6–§7、COMPUTE §6、ACTQUANT §4–§5 中重复的 MXCSR 段落与验收方法细节收敛到唯一位置；ACTQUANT §5 只留复现入口与方法要点。
 - [x] **STATUS**：按 D0011 结论 5 重写。
 - [x] **已结项 P**：按 D0011 结论 3 压缩，至少覆盖 P0009–P0014；front matter 与 `## 收尾` 语义不变，记录内留压缩前提交指针。
-- [ ] **不丢事实**：逐页列出删除段落及其保留位置，供人工核对；带测量的数字仍附环境。
+- [x] **不丢事实**：逐页列出删除段落及其保留位置，供人工核对；带测量的数字仍附环境。
 - [x] **引用可解析**：全部 Markdown 内部链接与锚点经一次性脚本核对无断裂；`check_repo.py --strict` 与 `--range` 均 E=0 W=0 I=0。
-- [ ] **人工收尾**：用户评审通过后结项。
+- [x] **人工收尾**：用户评审通过后结项。
 
 ## 记录
 
@@ -33,8 +33,7 @@ followups: []
 
 - 依据 [D0011](decisions/d0011-doc-single-source.md)；规模数据来自 2026-10-13 会话审议（`wc -m` 统计，`docs/` 约 4.6 万、`plan/` 约 9.7 万字符）。
 - 范围外：已 accepted 的 D、AGENTS.md、`check_repo` 扩展、代码与测试。
-- 提交直接进 main，subject 用 `P0015 plan:` 与 `P0015 docs:`；不经合并，不递增 VERSION。
-- 2026-10-13：用户审议通过 D0011 与本项范围并授权推进；D0011 accepted，本项 active。
+- 提交直接进 main，不经合并，不递增 VERSION。
 
 ### 删减与保留位置
 
@@ -54,11 +53,21 @@ followups: []
 ### 最终证据
 
 - 一次性脚本 `scratch/check_links.py`（不入库）核对全部 Markdown 内部链接与 GitHub 风格锚点：改动前后均 broken=0。
-- `check_repo.py --strict` E=0 W=0 I=0，`git diff --check` 通过；P0009–P0014 的 `## 收尾` 与 `b60526d` 逐字一致，front matter 只改 `updated`。
+- `check_repo.py --strict` 与 `--range b60526d~1..ec22772 --strict` 均 E=0 W=0 I=0，`git diff --check` 通过；P0009–P0014 的 `## 收尾` 与 `b60526d` 逐字一致，front matter 只改 `updated`。
 - 体量（`wc -m`）：P0009–P0014 合计 49,170 → 19,399；`plan/` 100,192 → 69,376；`docs/` 46,283 → 45,963（新增覆盖矩阵抵消大部分删减）。
+
+### 评审处置
+
+- 2026-10-13：用户审议通过 D0011 与本项范围并授权推进；D0011 accepted，本项 active。
+- 2026-10-13：用户评审删减与保留位置表及全部改动，确认无误，授权提交与结项。
+- 既存出入未改：P0014 收尾写「七项验收」而清单为八条，按 D0011 结论 3 不改收尾。
+
+### 提交
+
+- `b60526d` D0011 接受与登记，`73c75a2` docs 收敛，`ec22772` 模板、STATUS 与 P 压缩；本提交结项并同步 STATUS。
 
 ## 收尾
 
-- 验收或停止依据：尚未启动。
-- 知识处置：pending；预计 updated，归档目标为 MODEL §4、BUILD §1 与模板。
-- 剩余义务：待定。
+- 验收或停止依据：九项验收全部成立；链接、仓库检查与范围审计证据见最终证据，2026-10-13 用户评审通过。未扩展 `check_repo` 的锚点校验，锚点完整性只在本次以一次性脚本核对。
+- 知识处置：updated；验证链覆盖边界归档 [MODEL §4](../docs/MODEL.md#4-精确性链条)，ENV-A 与八模式 MXCSR 归档 [BUILD](../docs/BUILD.md)，写作约定理由留 [D0011](decisions/d0011-doc-single-source.md)，模板见 `plan/TEMPLATE.md`。
+- 剩余义务：无。D0005–D0010 与 P0001–P0008 未压缩，D 按 D0011 不改写；AGENTS.md 构建路由与 CI 表述统一未纳入本项，需要时另行修宪。
