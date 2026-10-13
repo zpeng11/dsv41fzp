@@ -1,7 +1,7 @@
 ---
 id: P0014
 title: 建立官方动态激活量化（BF16→E4M3FN+UE8M0，每 32 元素）的 CPU 规范参照
-status: active
+status: completed
 created: 2026-10-13
 updated: 2026-10-13
 knowledge: updated
@@ -30,8 +30,8 @@ followups: []
   - 相邻组 scale 不同的多组，以及跨 128 元素边界、能识别"每四组共享 scale"的错组用例。
 - [x] **与计算参照组合**：输出直接喂给 `ref/compute.py::expert_grouped_dot`，在定向向量上与独立构造的单输出期望一致；只作为测试，不新增组合入口，不以组合结果代替分阶段验证。
 - [x] **测试敏感性与失败传播**：在独立临时副本中分别注入：指数改用 floor 或 round；每四组共享 scale；E4M3FN 截断或中点远离零；`−0` 规范化为 `+0`；去掉 amax 下限；BF16 次正规解码冲为同号零；binary32 商次正规冲零；binary32 商中点远离零。每类由指定定向用例产生数值或阶段位比较失败，恢复后全部通过、源字节不变；仅异常或进程故障不作为语义敏感性证据。BF16 解码与商阶段的注错即使不改变最终 FP8 编码，也必须由阶段位比较检出。用精确 `1/448` 代替 `fl32(1/448)` 在 BF16 输入上不改变指数、scale 与最终编码，但不保证乘积阶段位相同；不新增其为必选敏感性变体。错误结果或异常使入口非零退出，必选用例无 skip。
-- [ ] **CPU 独立复现**：一条 Python 命令运行全部必选验收，仅依赖标准库，不初始化 Torch/TileLang/CUDA，不依赖目标机、权重或设备 dump；接入全量 CPU Debug/Release 的 CTest，不扩大 `cpu-asan`。从源码目录外及干净检出复现，既有格式、计算与仓库检查回归通过，`check_repo.py --strict` 与提交范围审计 E=0 W=0 I=0。
-- [ ] **知识与人工收尾**：经用户确认后按 D0010 归档契约、来源与验证边界，QUANT §5、COMPUTE 与 MODEL §4 加路由，BUILD 更新测试入口，同步 STATUS；必要知识缺失阻塞结项。用户评审后才结项。
+- [x] **CPU 独立复现**：一条 Python 命令运行全部必选验收，仅依赖标准库，不初始化 Torch/TileLang/CUDA，不依赖目标机、权重或设备 dump；接入全量 CPU Debug/Release 的 CTest，不扩大 `cpu-asan`。从源码目录外及干净检出复现，既有格式、计算与仓库检查回归通过，`check_repo.py --strict` 与提交范围审计 E=0 W=0 I=0。
+- [x] **知识与人工收尾**：经用户确认后按 D0010 归档契约、来源与验证边界，QUANT §5、COMPUTE 与 MODEL §4 加路由，BUILD 更新测试入口，同步 STATUS；必要知识缺失阻塞结项。用户评审后才结项。
 
 ## 记录
 
@@ -93,8 +93,16 @@ followups: []
 - 环境与方法：Python 3.12.8（conda-forge）、Linux 5.15.0-72-generic x86_64 / glibc 2.43、Intel Xeon Platinum 8350C；GCC 15.2.0、CMake/CTest 4.4.4。完整 Python 验收 34/34，无 skip；源码目录外量化/格式/计算分别 34/34、19/19、30/30。复用本轮评审在 `/tmp` 新建的独立构建目录重新 build 与 CTest，Debug 21/21、Release 21/21、quant ASan/UBSan 12/12，asan 范围不变；以上均为未提交工作树复验，不替代已提交版本干净检出。
 - 复核：本轮修复经聚焦只读评审与临时变体复核，未发现新增确认缺陷。`check_repo.py --strict`、当前 `--range main..HEAD --strict` 均 E=0 W=0 I=0，后者仍仅覆盖前置登记提交，不宣称审计未提交实现。既有 `ref/formats.py`、`ref/dequant.py`、`ref/compute.py`、AGENTS.md、VERSION、官方镜像与冻结区保持不变。
 
+### 提交、审计与结项证据
+
+- 2026-10-13：用户人工评审通过全部改动（含独立复核审议）并授权按流程提交；进入收尾。
+- 提交：`a63eafd` 实现与测试及 CTest 接入，`80216f8` 契约归档与四页路由，`d522379` 证据回填与 STATUS 同步。
+- 审计：`check_repo.py --strict` 与 `--range main..HEAD --strict`（覆盖前置登记与全部实现提交）均 E=0 W=0 I=0。
+- 干净检出：`git clone --no-local` 于 `d522379` 全新克隆，工作树干净；自克隆目录外运行三份 Python 验收 `test_act_quant` 34/34、`test_formats` 19/19、`test_compute` 30/30，无 skip；克隆内 `check_repo.py --strict` E=0；全新 `cpu-debug`/`cpu-release` 构建零告警，`ctest --test-dir` 自克隆目录外各 21/21，`quant.act_quant` 在册；构建后克隆工作树保持干净。
+- 环境：Python 3.12.8（conda-forge）、Linux 5.15.0-72-generic x86_64 / glibc 2.43、Intel Xeon Platinum 8350C；GCC 15.2.0、CMake/CTest 4.4.4。
+
 ## 收尾
 
-- 验收或停止依据：前置决策与五项实现/数值/敏感性验收成立，本轮评审发现已处理并完成工作树复验；CPU 独立复现中的提交后干净检出及实现提交范围审计未完成，修复后的最终人工评审尚未批准。保持 active，不结项。
+- 验收或停止依据：七项验收全部成立。实现与测试见提交 `a63eafd`、知识归档见 `80216f8`、干净克隆复现于 `d522379`；2026-10-13 用户人工评审通过。未验证 SIMD/CUDA、K-X1 kernel、K-E1/K-E2、官方 GPU、端到端一致及非 glibc/非 Linux x86_64 环境。
 - 知识处置：updated；契约、来源、阶段观测、失败、环境与验证边界归档 [ACTQUANT](../docs/ACTQUANT.md)，路由与测试入口见 QUANT/COMPUTE/MODEL/BUILD；选择理由留 D0010，过程与验收证据留本项。
-- 剩余义务：实现提交后的干净检出复现与实现提交范围审计、用户人工评审和结项。生产 C++、SIMD/CUDA、官方 GPU、K-E1/K-E2、完整专家 MLP 与端到端验证不属于本项。
+- 剩余义务：无。同契约生产 C++ scalar、SIMD/CUDA、官方 GPU 仲裁、K-E1/K-E2 与端到端验证不属于本项，待立项时另建 P 并引用本项。
