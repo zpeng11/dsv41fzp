@@ -11,7 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
-| [P0016 — checkpoint 清点与 MODEL §2 核对](p0016-checkpoint-inventory.md) | active | 按 [D0012](decisions/d0012-checkpoint-inventory.md) 实现清点工具与真实 checkpoint 核对 |
+| [P0016 — checkpoint 清点与 MODEL §2 核对](p0016-checkpoint-inventory.md) | active | 技术验收已成立，待用户评审后结项合入 |
 ## 已验收入口
 
 | 入口 | 契约 | 证据 |
