@@ -11,7 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
-| [P0014 — 官方动态激活量化 CPU 规范参照](p0014-act-quant-oracle.md) | active | 用户审议通过当前范围与 [D0010](decisions/d0010-act-quant-reference.md)（accepted）；计划已批准，实现与验收尚未开展 |
+| [P0014 — 官方动态激活量化 CPU 规范参照](p0014-act-quant-oracle.md) | active | 实现、测试与知识归档已提交（`a63eafd`、`80216f8`）；待提交范围审计、提交后干净检出与用户最终人工评审 |
 
 ## 数值入口与边界
 
@@ -19,7 +19,8 @@
 - **已验收的生产入口**：`df_quant`，公共头 `include/df/quant/codec.h` 与 `dequant.h`；接口、布局、失败与环境契约见 [QUANT §6～§7](../docs/QUANT.md#6-生产-c-codecsrcquant)，证据见 [P0010](p0010-quant-scalar-baseline.md#收尾)、[P0011](p0011-quant-dequant-scalar.md#收尾)。它们覆盖格式 codec 与六类给定 scale 的逐元素反量化，不是 GEMM、累加后乘 scale、整数点积或提前 BF16 舍入的参照，不表示 K-Q1～K-Q3 全部完成。
 - **已验收的计算参照**：`ref/compute.py`，必选命令 `python3 tests/quant/test_compute.py`，CTest 入口 `quant.compute`。单输出专家 FP8×packed FP4、双方每 32 元素分组的 CPU 契约见 [COMPUTE](../docs/COMPUTE.md)，复现入口见 [BUILD](../docs/BUILD.md#7-测试清单)，证据见 [P0012](p0012-expert-grouped-dot-oracle.md#收尾)。它只供同契约后续实现对照，不直接验收 K-E1/K-E2 或官方 GPU，路由见 [MODEL §4](../docs/MODEL.md#4-精确性链条)。
 - **已验收的生产计算**：`df_quant` 公共头 `include/df/quant/compute.h`，入口 `expert_grouped_dot`；接口、失败、环境与验证边界见 [COMPUTE §6](../docs/COMPUTE.md#6-生产-c-scalarsrcquant)，CTest 入口 `quant.compute.{parity,contract,add,harness}` 见 [BUILD §7](../docs/BUILD.md#7-测试清单)，证据见 [P0013](p0013-expert-grouped-dot-scalar.md#收尾)。同契约快路径只对照它，它不直接验收 K-E1/K-E2 或官方 GPU。
-- **仍未覆盖**：有损编码/scale 生成与动态量化尚未实现，其中官方动态激活量化的 CPU 参照已立项为 P0014 active。同契约计算快路径、K-E1 同路径参照与跨路径质量偏差、整数改写及 scale 折叠、SIMD/CUDA、GPU cast/FTZ、官方 GPU parity 与双 arch 端到端一致尚未立项。W4A16 decode 默认规划不变。
+- **动态激活量化参照**：`ref/act_quant.py` 的 `act_quant` 与 `trace_act_quant` 已落盘，单行 BF16→E4M3FN+E8M0 CPU 契约见 [ACTQUANT](../docs/ACTQUANT.md)，命令 `python3 tests/quant/test_act_quant.py`，CTest 入口 `quant.act_quant`；独立技术测试及组合验证通过，尚未完成 P0014 的提交后干净检出与人工结项，不宣称官方 GPU 一致。
+- **仍未覆盖**：生产动态激活量化、其他有损编码/scale 生成、动态 KV 量化、同契约计算快路径、K-E1 同路径参照与跨路径质量偏差、整数改写及 scale 折叠、SIMD/CUDA、GPU cast/FTZ、官方 GPU parity 与双 arch 端到端一致尚未立项。W4A16 decode 默认规划不变。
 
 ## 其他入口与阻塞
 
