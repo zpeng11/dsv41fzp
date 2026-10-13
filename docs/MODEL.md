@@ -215,13 +215,15 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡]；分解：专家 FP4 302 + eng
   │    └─ src/quant/ C++ scalar codec 与给定 scale dequant
   │         └─ 同契约格式/逐元素 dequant kernel parity
   └─ 计算：官方源码阶段约束 + 独立精确算术 + 明确的 CPU 数值契约
+       ├─ BF16 动态激活量化 CPU 规范：ACTQUANT → Python 量化参照
+       │    └─ 同契约生产 scalar → 同契约激活量化 kernel parity
        ├─ 官方 FP8×FP4 阶段约束下的 CPU 规范：COMPUTE → Python 计算参照
        │    └─ src/quant/ C++ scalar 专家分组点积 → 同契约计算 kernel parity
        ├─ K-E1 W4A16：BF16 激活、权重反量化落点及累加规则一致的计算参照
        └─ K-E2 W4A8-int8：整数改写计算参照与相对官方路径的独立验证
 ```
 
-格式与逐元素反量化契约见 [QUANT](QUANT.md)；官方 FP8×FP4 阶段约束下的 CPU 规范见 [COMPUTE](COMPUTE.md)，选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)。每段快代码只对照上一级已验证的同契约 scalar；格式正确不证明归约、移动 scale、提前 BF16 或整数改写等价。官方 GPU 的归约、融合及 cast/FTZ 须设备仲裁，不能由 CPU 契约推定。
+格式与逐元素反量化契约见 [QUANT](QUANT.md)；BF16 动态激活量化 CPU 规范见 [ACTQUANT](ACTQUANT.md)，选择理由见 [D0010](../plan/decisions/d0010-act-quant-reference.md)，其输出可直接供给计算参照。官方 FP8×FP4 阶段约束下的 CPU 规范见 [COMPUTE](COMPUTE.md)，选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)。每段快代码只对照上一级已验证的同契约 scalar；格式正确不证明归约、移动 scale、提前 BF16 或整数改写等价。官方 GPU 的归约、融合及 cast/FTZ 须设备仲裁，不能由 CPU 契约推定。
 
 W4A16 decode 默认规划不变。实现 parity 与相对官方 FP8 dynamic 路径的质量偏差分别验收；后者须从共同量化前激活覆盖动态量化链并记录环境，不能以路径差异本身代替质量测量。双 arch 顶层锁仍按冻结 prompt 集独立验收 sm80/sm120 端到端贪心逐 token 一致，不由局部 oracle 保证。
 

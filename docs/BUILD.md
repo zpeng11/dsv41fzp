@@ -1,6 +1,6 @@
 # BUILD.md — CPU-only 构建与测试契约
 
-本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)、[P0010](../plan/p0010-quant-scalar-baseline.md)、[P0011](../plan/p0011-quant-dequant-scalar.md) 与 [P0012](../plan/p0012-expert-grouped-dot-oracle.md)；计算参照契约见 [COMPUTE](COMPUTE.md)，状态不在本页记录。
+本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)、[P0010](../plan/p0010-quant-scalar-baseline.md)、[P0011](../plan/p0011-quant-dequant-scalar.md)、[P0012](../plan/p0012-expert-grouped-dot-oracle.md) 与 [P0014](../plan/p0014-act-quant-oracle.md)；计算与动态激活量化参照契约分别见 [COMPUTE](COMPUTE.md)、[ACTQUANT](ACTQUANT.md)，状态不在本页记录。
 
 **来源标记**：**[D]** D0005/D0007 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
 
@@ -88,6 +88,7 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `bb.compile_flags` | 从 `compile_commands.json` 验证严格选项只出现在应有的 target（含 `df_quant`，不含其执行器），全部 target 无 fast-math、`-march` 与 `-fsanitize` |
 | `quant.formats` | `tests/quant/test_formats.py` |
 | `quant.compute` | `tests/quant/test_compute.py`：专家 FP8×packed FP4 单输出计算参照的独立逐阶段期望、输入契约、临时副本敏感性与失败传播 |
+| `quant.act_quant` | `tests/quant/test_act_quant.py`：BF16 动态激活量化参照的独立逐阶段期望、有限码点穷举、布局与计算组合、临时副本敏感性与失败传播 |
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
 | `quant.codec.contract` | 每类输入拒绝、失败时输出不变、格式契约版本 |
 | `quant.codec.harness` | 执行器崩溃、退出、乱码、缺响应、缺执行器、协议错误与结果篡改均使驱动失败 |
@@ -109,7 +110,15 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_compute.py
 
 参照入口是 `ref/compute.py` 的 `expert_grouped_dot` 与 `trace_expert_grouped_dot`，普通输出为 FP32 承载 float 或 BF16 原始位模式，观测共享计算路径。输入、分组、逐步舍入及验证链以 COMPUTE 为唯一契约来源；该验收不证明生产 C++、K-E1/K-E2、官方 GPU 或端到端一致。不初始化 Torch/TileLang/CUDA，不依赖目标机、权重、设备 dump 或网络。`quant.compute` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。[代码][实测]
 
-`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 不在其中。三组 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
+动态激活量化参照的全部必选验收命令如下；源码目录外使用脚本绝对路径。仅标准库，不初始化 Torch/TileLang/CUDA，不依赖编译器、权重、GPU 或网络。数值期望用 `Fraction` 位域、独立邻点搜索与逐步 RNE，每组 scale 的精确指数另行复核；观测检查编码前的 binary32 位，不以最终 FP8 编码一致掩盖解码或商阶段错误。接口、环境与验证链以 [ACTQUANT](ACTQUANT.md) 为唯一契约来源，验收证据见 [P0014](../plan/p0014-act-quant-oracle.md)。实测环境同 §1。[代码][实测]
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_act_quant.py
+```
+
+`quant.act_quant` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release。浮点环境探针使用 Python 标准库 `ctypes` 调用支持环境的 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
+
+`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。三组 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
 反量化与私有乘法测试覆盖默认、向上、向下、向零、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码；执行器回报设置，并在每次生产调用前后核对完整 MXCSR，包含异常路径，stdio 在核对窗口外。量化格式、数值与验证边界见 [QUANT §7](QUANT.md#7-给定-scale-的生产-scalar-反量化)。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
 
