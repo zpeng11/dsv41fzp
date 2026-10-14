@@ -1,6 +1,6 @@
-# COMPUTE.md — 专家分组点积 CPU 参照契约
+# COMPUTE.md — 专家分组点积与线性层 CPU 契约
 
-本页定义官方 FP8×FP4 路径阶段约束下的单输出 CPU 规范，不宣称官方 GPU 逐位等价。选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)，实施与验收见 [P0012](../plan/p0012-expert-grouped-dot-oracle.md)，验证链见 [MODEL §4](MODEL.md#4-精确性链条)。模型事实只引用 MODEL，格式与既有舍入只引用 [QUANT](QUANT.md)。
+本页定义官方 FP8×FP4 路径阶段约束下的单输出 CPU 规范及复用它的完整线性层契约，不宣称官方 GPU 逐位等价。选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)，实施与验收见 [P0012](../plan/p0012-expert-grouped-dot-oracle.md)，验证链见 [MODEL §4](MODEL.md#4-精确性链条)。模型事实只引用 MODEL，格式与既有舍入只引用 [QUANT](QUANT.md)。
 
 ## 1. 来源与参照边界
 
@@ -66,3 +66,13 @@ bf16_result = RNE_BF16(fp32_result)
 - **失败**：只抛 `std::invalid_argument`：K 为零或不整除 32、权重或 scale 长度不符、输出为空、NaN 激活编码 `0x7F/0xFF` 或 NaN scale 编码 `0xFF`、任一输入与输出元素有字节重叠（相邻不算）。长度与重叠先于任何输入读取，内容校验先于输出写入，失败时输出不变。本入口不做元数据乘法，没有 `std::overflow_error` 类；K=0 被拒绝，与 QUANT 反量化接受零元素张量的约定有意不同。Python 侧的类型、宽度与输出模式拒绝属于 §2 的 oracle 契约，C++ 由定宽类型与重载表达，两者不一一对应。[D0009][C++计算][计算测试]
 - **数值与环境**：全部阶段以定宽整数位运算构造，不执行浮点运算，不读写浮点环境。块内乘积复用 QUANT §7 的有限乘法；乘 scale 前，Inf/NaN 中间值先分流（scale 严格为正，原样保留），只有有限值进入乘法。加法采用定宽对齐与 sticky，复用既有 binary32 RNE 构造；合法输入产生的 Inf/NaN 是结果，不是失败。在 [BUILD §7](BUILD.md#7-测试清单) 的八模式 MXCSR 下（含状态位预置），逐阶段结果均与 `ref/compute.py` 一致，完整 MXCSR 不变。[D0009][C++计算][计算测试]
 - **验证边界**：公开两种入口与私有 trace 连接执行同一计算核心，逐阶段对照 §4 的观测；私有加法探针对照 `ref/compute.py` 的加法，只补充公开路径难以构造的边界，不替代公开路径证据。不覆盖项见 [MODEL §4](MODEL.md#4-精确性链条)，测试入口见 [BUILD §7](BUILD.md#7-测试清单)。[D0009][计算测试]
+
+## 7. 单 token 专家线性层
+
+本节为 [D0014](../plan/decisions/d0014-expert-linear-scalar.md) 接受的生产接口契约，实施与验收证据见 [P0019](../plan/p0019-expert-linear-scalar.md)。数值规格不新增：输入量化遵循 [ACTQUANT](ACTQUANT.md)，每个输出行的点积与最终转换遵循本页 §3、§6；维度和分组数字为契约约束，不是性能测量。[D0014]
+
+- **入口与所有权**：`include/df/quant/linear.h` 的 `df::quant::expert_linear(input, n, w_packed, scale_b, a_codes, scale_a, out)`；input 是 BF16 原始位只读 span，权重与 scale_b 是字节只读 span，两个工作缓冲是可写字节 span。out 提供 FP32 原始位 `span<uint32_t>` 与 BF16 原始位 `span<uint16_t>` 两个重载；调用方拥有全部存储，库不动态分配。[D0014]
+- **布局与容量**：K 为 input 长度，N 为 n，两者为正且 K 整除组大小 32。权重按输出行连续存储，每行 K/2 字节，scale_b 每行 K/32 字节；两份输入长度须分别精确等于 `N*(K/2)`、`N*(K/32)`。w1/w3 与 w2 仅 N/K 不同，不转置、不广播、不接收任意 stride。a_codes、scale_a、out 容量至少 K、K/32、N，仅写有效前缀。[D0014]
+- **别名与拒绝**：三个实际写入前缀互不重叠，并与所有输入的实际读取区间不重叠；只读输入之间允许重叠，未使用尾部不参与判定，精确相邻允许。维度、尺寸及字节计数溢出、长度、容量与别名检查先于内容读取；全矩阵 scale_b 的 `0xFF` 编码及非有限 BF16 输入均在任何写入前拒绝。所有约定参数错误抛 `std::invalid_argument`，输出与两份工作缓冲全部不变，即使错误位于最后一行。合法结果中的 Inf/NaN 不算拒绝。[D0014]
+- **组合与环境**：调用一次生产 act_quant，将其实际输出缓冲供全部行的生产 expert_grouped_dot 直接消费；FP32/BF16 重载不改变中间计算。沿用整数数值路径，不读取或修改调用方浮点环境。不提供整矩阵 trace 或新的舍入、归约路线。[D0014]
+- **验证路由**：上一级与覆盖边界见 [MODEL §4](MODEL.md#4-精确性链条)，测试及离线工具见 [BUILD §7](BUILD.md#7-测试清单)，验收方法与证据见 P0019。[D0014]

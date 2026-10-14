@@ -112,7 +112,7 @@ def build(directory, cxx):
                  '-I' + str(directory / 'src/quant'),
                  str(directory / 'quant_exec.cpp'),
                  *[str(directory / 'src/quant' / name) for name in
-                   ('codec.cpp', 'dequant.cpp', 'compute.cpp', 'act_quant.cpp')],
+                   ('codec.cpp', 'dequant.cpp', 'compute.cpp', 'act_quant.cpp', 'linear.cpp')],
                  '-o', str(executable)])
     return executable
 

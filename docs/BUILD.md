@@ -104,9 +104,14 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.act_quant.contract` | 长度、双输出容量、非有限、实际写入范围重叠、trace 形状与别名拒绝，失败输出不变；精确分配、相邻范围、未使用尾部共享与 ASan 输入加毒 |
 | `quant.act_quant.combination` | 执行器内生产量化结果直接供生产分组点积，两种输出对照 Python 量化和计算参照组合 |
 | `quant.act_quant.harness` | 量化协议、trace 响应形状、执行器故障与 ASan 加毒有效性均传播到驱动失败 |
+| `quant.linear.parity` | 完整 FP32/BF16 输出及工作缓冲对照既有 Python 量化与逐行点积参照组合 |
+| `quant.linear.contract` | 矩阵维度、容量、别名与内容拒绝，完整输出及两份工作缓冲的失败原子性、输入和写范围外字节不变 |
+| `quant.linear.harness` | 线性协议、执行器故障、布局及结果错误的检出与失败传播 |
+| `quant.linear.consumer` | 仅使用公共头和 df_quant 的独立 C++ 调用，手算输出、舍入和矩阵级拒绝；安全构造尺寸溢出 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
 | `tools.ckpt_inventory` | `tests/tools/test_ckpt_inventory.py`：合成 safetensors 上的每类结构与 index 拒绝、预期比对的缺失/多余/dtype/shape 检出、小配置的手算张量计数与 shape 抽查、扫描计数与逐元素朴素计数一致且不随分块与进程数变化 |
 | `tools.ckpt_expert` | `tests/tools/test_ckpt_expert.py`：合成 safetensors 的独立行字节与读取区间期望、权重/scale 配对、错误拒绝、生产组合 parity 和故障传播；通过 `df_quant_exec` 消费原始编码，不依赖真实 checkpoint |
+| `tools.ckpt_linear` | `tests/tools/test_ckpt_linear.py`：合成完整 w1 的独立字节和全部读取区间、生产线性全输出与失败传播；不依赖真实 checkpoint |
 
 计算参照与动态激活量化参照的全部必选验收也可单独运行；从源码目录外运行时使用脚本绝对路径。两者仅依赖标准库，不初始化 Torch/TileLang/CUDA，不依赖目标机、权重、设备 dump 或网络；错误结果、异常或 skip 使命令非零退出。验证方法与契约分别以 [COMPUTE](COMPUTE.md) 与 [ACTQUANT](ACTQUANT.md) 为唯一来源。[代码][实测]
 
@@ -141,12 +146,24 @@ python3 tools/ckpt_expert.py <snapshot> --exe build/cpu-release/tests/quant/df_q
 
 成功 JSON 记录快照 revision、源码 SHA/VERSION/dirty、实测运行环境、执行器路径与 SHA256、输入构造和原始位指纹、每段载荷的张量名/文件/绝对字节偏移/长度/SHA256、比较计数及两类输出。源码身份与执行器指纹分别记录，不能据前者推定任意外部二进制的构建身份。报告以独占创建写入，拒绝覆盖已有目标或写入 checkpoint 目录；复跑须指定新报告名。退出码 0 表示通过，1 表示验证失败，2 表示参数或 I/O 错误；缺权重不 skip。`--reference` 仅用于指定结构核对的配置来源，正式快照验证使用默认只读镜像。报告属生成物，不入库。[代码]
 
-`tools.ckpt_expert` 只在 CPU Debug/Release 注册，使用临时合成文件与当前构建的执行器；不扩大 quant 专用 sanitizer 范围。源码目录外运行上述入口时，脚本、快照、执行器和报告目标均使用绝对路径。[代码]
+**完整专家线性验证**由 `tools/ckpt_linear.py` 执行。工具复用上述结构检查与行读取，仅消费 `layers.0.ffn.experts.0.w1` 的完整权重和 scale；每个 `mixed`/`group_ramp` 输入由生产线性入口计算完整 FP32/BF16 向量，对照 Python 量化与逐行点积参照组合。[代码]
+
+```bash
+python3 tools/ckpt_linear.py <snapshot> --exe build/cpu-release/tests/quant/df_quant_exec --json build/ckpt-linear.json
+PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_linear_parity.py --exe build/cpu-release/tests/quant/df_quant_exec --suite parity
+PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/linear_sensitivity.py
+```
+
+`ckpt_linear.py` 的报告记录与覆盖保护沿用上述约束，另含整矩阵载荷指纹、全部行读取区间、完整输出及比较计数；失败定位到输入与输出行。生产契约见 [COMPUTE §7](COMPUTE.md#7-单-token-专家线性层)，验证边界见 [MODEL §4](MODEL.md#4-精确性链条)。线性测试驱动的 `--suite` 为 `parity`、`contract` 或 `harness`；别名构造与验收证据见 [P0019](../plan/p0019-expert-linear-scalar.md)。[代码]
+
+`linear_sensitivity.py` 在临时源码副本中验证生产变体检出，门禁见 P0019。该命令需要 C++ 编译器（可用 `--cxx` 指定），不进入每次 CTest，不改工作树或冻结数据。[代码]
+
+`tools.ckpt_expert` 与 `tools.ckpt_linear` 只在 CPU Debug/Release 注册，使用临时合成文件与当前构建的执行器；不扩大 quant 专用 sanitizer 范围。源码目录外运行上述入口时，脚本、快照、执行器和报告目标均使用绝对路径。[代码]
 
 `quant.compute` 与 `quant.act_quant` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
 
-`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。四组 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
+`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}`、`quant.linear.{parity,contract,harness,consumer}` 与 `quant.compile_flags`（验证 df_quant、df_quant_exec 与 df_linear_consumer 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。经协议调用的 quant 套件通过 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
-**八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。`quant.dequant.{parity,multiply}`、`quant.compute.parity`、`quant.act_quant` 与生产 `quant.act_quant.{parity,contract,combination}` 使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
+**八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。`quant.dequant.{parity,multiply}`、`quant.compute.parity`、`quant.act_quant`、生产 `quant.act_quant.{parity,contract,combination}` 与 `quant.linear.{parity,contract}` 使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
 
 `bb.*` 工件只在 `tests/cpu/build_baseline/`，是构建基线的测试件，不是引擎模块。[代码] 仓库检查 `tools/check_repo.py` 仍按 AGENTS.md 工作流独立执行，不由 CTest 替代。
