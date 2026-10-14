@@ -8,9 +8,9 @@
 #include <type_traits>
 
 namespace df::quant {
-namespace {
+namespace detail {
 
-// Significands span at most 64 bits; a left shift only widens a result below 2^24.
+// Shared RNE for significands up to 64 bits; callers bound any left shift.
 std::uint64_t round_shift(std::uint64_t significand, int shift) noexcept {
   if (shift <= 0) {
     return significand << -shift;
@@ -26,10 +26,6 @@ std::uint64_t round_shift(std::uint64_t significand, int shift) noexcept {
   const std::uint64_t midpoint = std::uint64_t{1} << (shift - 1);
   return whole + (remainder > midpoint || (remainder == midpoint && (whole & 1)));
 }
-
-}  // namespace
-
-namespace detail {
 
 std::uint32_t binary_to_fp32(std::uint32_t sign, std::uint64_t significand, int exponent) noexcept {
   if (significand == 0) {
