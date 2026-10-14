@@ -11,6 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
+| [P0019 — 专家线性层生产 CPU scalar](p0019-expert-linear-scalar.md) | active | 代码已审议；待提交后干净检出复现、范围审计与收尾 |
 
 ## 已验收入口
 

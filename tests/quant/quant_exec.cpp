@@ -15,6 +15,13 @@
 //             : <BF16 bits> ...
 //   combination: act_quant_dot_fp32|act_quant_dot_bf16 cap=<n>
 //             : <BF16 bits> ... ; <packed weights> ... ; <scale_b> ...
+//   P0019: expert_linear_fp32|expert_linear_bf16 shape=N cap=<out capacity>
+//             [a_cap=K scale_cap=K/32] [workspace] [overlap=<buffer>,<buffer>]
+//             [in_offset=<bytes> out_offset=<bytes>] [poison|poison_writes]
+//             : <BF16 bits> ... ; <row-major packed weights> ... ; <scale_b> ...
+//   Linear buffers are input,w,sb,a,sa,out. Defaults are exact workspace sizes;
+//   workspace responses are uint32 words: full out, full a, full sa capacities.
+//   poison makes inputs unreadable; poison_writes makes destinations inaccessible.
 //   Activation ok responses contain uint32 words: both complete output buffers,
 //   then (trace only) amax, bounded_amax, product, exponent, quotient, clamped.
 //   response: ok <hex output element> ...   (the whole output buffer, cap elements)
@@ -82,6 +89,7 @@
 #include "df/quant/codec.h"
 #include "df/quant/compute.h"
 #include "df/quant/dequant.h"
+#include "df/quant/linear.h"
 
 namespace {
 
@@ -123,12 +131,21 @@ struct Request {
   std::size_t in_offset = 0;
   std::size_t out_offset = 0;
   bool poison = false;
+  bool poison_writes = false;
+  bool workspace = false;
+  bool has_a_cap = false;
+  std::size_t a_cap = 0;
   std::vector<std::vector<std::uint64_t>> sections;
   std::vector<std::uint64_t> tokens;
   std::vector<std::uint64_t> scale_tokens;
 };
 
+constexpr std::string_view kLinearBuffers[] = {"input", "w", "sb", "a", "sa", "out"};
 constexpr std::string_view kComputeInputs[] = {"a", "w", "sa", "sb"};
+
+bool is_linear(const Request& req) {
+  return req.op == "expert_linear_fp32" || req.op == "expert_linear_bf16";
+}
 constexpr std::string_view kActBuffers[] = {"input", "a", "scale", "amax_bits",
     "bounded_amax_bits", "product_bits", "exponent", "quotient_bits", "clamped_bits"};
 
@@ -188,7 +205,17 @@ Request parse_request(std::string_view line) {
   req.op = std::string(head[0]);
   for (std::size_t i = 1; i < head.size(); ++i) {
     const std::string_view field = head[i];
-    if (field.starts_with("scale_cap=")) {
+    if (field.starts_with("a_cap=")) {
+      if (!is_linear(req) || req.has_a_cap) die("invalid or duplicate a_cap");
+      req.a_cap = parse_number(field.substr(6), 10);
+      req.has_a_cap = true;
+    } else if (field == "workspace") {
+      if (!is_linear(req) || req.workspace) die("invalid or duplicate workspace");
+      req.workspace = true;
+    } else if (field == "poison_writes") {
+      if (!is_linear(req) || req.poison_writes) die("invalid or duplicate poison_writes");
+      req.poison_writes = true;
+    } else if (field.starts_with("scale_cap=")) {
       if (req.has_scale_cap) die("duplicate scale_cap field");
       req.scale_cap = parse_number(field.substr(10), 10);
       req.has_scale_cap = true;
@@ -217,7 +244,18 @@ Request parse_request(std::string_view line) {
     } else if (field.starts_with("overlap=")) {
       if (req.has_overlap) die("duplicate overlap field");
       const auto name = field.substr(8);
-      if (req.op == "act_quant" || req.op == "act_quant_trace") {
+      if (is_linear(req)) {
+        const auto comma = name.find(',');
+        if (comma == std::string_view::npos) die("linear overlap needs two buffers");
+        const auto index = [](std::string_view value) {
+          const auto* hit = std::find(std::begin(kLinearBuffers), std::end(kLinearBuffers), value);
+          if (hit == std::end(kLinearBuffers)) die("unknown linear buffer");
+          return static_cast<std::size_t>(hit - std::begin(kLinearBuffers));
+        };
+        req.act_first = index(name.substr(0, comma));
+        req.act_second = index(name.substr(comma + 1));
+        if (req.act_first == req.act_second) die("linear overlap needs distinct buffers");
+      } else if (req.op == "act_quant" || req.op == "act_quant_trace") {
         if (name == "input_a") { req.act_first = 0; req.act_second = 1; }
         else if (name == "input_scale") { req.act_first = 0; req.act_second = 2; }
         else if (name == "outputs") { req.act_first = 1; req.act_second = 2; }
@@ -906,6 +944,160 @@ std::string run_act_combination(const Request& req) {
   return ok_response(out.get(), req.cap);
 }
 
+// P0019 linear requests own exact allocations, snapshot all storage, and call only
+// the public matrix API. Workspace responses encode every element as a uint32 word.
+// The executor rejects intersecting full FP32-output/BF16-input spans: differently
+// typed arrays cannot share their object lifetimes, even in unused output tails.
+// This limits legal C++ test construction, not the production overlap contract.
+template <class Out>
+std::string run_linear(const Request& req, std::string_view fault) {
+  if (!req.has_cap || !req.has_shape || req.shape.size() != 1 || req.has_scale_shape ||
+      req.alias || req.scale_alias || req.has_trace_shape || req.has_trace_alias ||
+      req.trace_object_alias) die("linear requires shape=N cap= and no foreign fields");
+  require_sections(req, 3, "linear");
+  if ((req.has_in_offset || req.has_out_offset) && !req.has_overlap) die("linear offsets need overlap");
+  const std::size_t k = req.sections[0].size(), n = req.shape[0];
+  const std::size_t a_cap = req.has_a_cap ? req.a_cap : k;
+  const std::size_t sa_cap = req.has_scale_cap ? req.scale_cap : k / 32;
+  const std::size_t sizes[] = {buffer_bytes(k, 2), req.sections[1].size(),
+      req.sections[2].size(), a_cap, sa_cap, buffer_bytes(req.cap, sizeof(Out))};
+  const std::size_t alignments[] = {2, 1, 1, 1, 1, sizeof(Out)};
+  const auto deleter = [](void* p) { ::operator delete(p); };
+  using Owner = std::unique_ptr<void, decltype(deleter)>;
+  Owner owners[] = {Owner(nullptr, deleter), Owner(nullptr, deleter), Owner(nullptr, deleter),
+                    Owner(nullptr, deleter), Owner(nullptr, deleter), Owner(nullptr, deleter)};
+  Owner shared(nullptr, deleter);
+  std::unique_ptr<std::uint16_t[]> typed_shared;
+  const bool input_output_pair = req.has_overlap &&
+      ((req.act_first == 0 && req.act_second == 5) ||
+       (req.act_first == 5 && req.act_second == 0));
+  unsigned char* shared_base = nullptr;
+  unsigned char* buffers[6] = {};
+  std::size_t shared_size = 0;
+  if (req.has_overlap) {
+    for (const auto& [i, offset] : {std::pair{req.act_first, req.in_offset},
+                                   std::pair{req.act_second, req.out_offset}}) {
+      if (offset % alignments[i]) die("unaligned linear offset");
+      shared_size = std::max(shared_size, extent(offset, sizes[i]));
+    }
+    if constexpr (std::is_same_v<Out, std::uint32_t>) {
+      if (input_output_pair) {
+        if (sizes[req.act_first] != 0 && sizes[req.act_second] != 0 &&
+            req.in_offset < extent(req.out_offset, sizes[req.act_second]) &&
+            req.out_offset < extent(req.in_offset, sizes[req.act_first])) {
+          die("linear FP32 output and BF16 input full spans cannot intersect");
+        }
+      }
+    }
+    if constexpr (std::is_same_v<Out, std::uint16_t>) {
+      if (input_output_pair) {
+        typed_shared = std::make_unique<std::uint16_t[]>(shared_size / 2);
+        shared_base = reinterpret_cast<unsigned char*>(typed_shared.get());
+      }
+    }
+    if (!shared_base) {
+      shared.reset(::operator new(shared_size));
+      shared_base = static_cast<unsigned char*>(shared.get());
+    }
+    std::memset(shared_base, kFill, shared_size);
+    buffers[req.act_first] = shared_base + req.in_offset;
+    buffers[req.act_second] = shared_base + req.out_offset;
+  }
+  for (std::size_t i = 0; i < 6; ++i) {
+    if (!buffers[i]) {
+      owners[i].reset(::operator new(sizes[i]));
+      buffers[i] = static_cast<unsigned char*>(owners[i].get());
+    }
+    std::memset(buffers[i], kFill, sizes[i]);
+  }
+  for (std::size_t i = 0; i < k; ++i) {
+    const auto value = narrow_token<std::uint16_t>(req.sections[0][i]);
+    std::memcpy(buffers[0] + 2 * i, &value, 2);
+  }
+  for (std::size_t b = 1; b < 3; ++b) {
+    for (std::size_t i = 0; i < sizes[b]; ++i) buffers[b][i] = narrow_token<std::uint8_t>(req.sections[b][i]);
+  }
+  std::vector<unsigned char> before[6];
+  for (std::size_t i = 0; i < 6; ++i) before[i].assign(buffers[i], buffers[i] + sizes[i]);
+  auto* base = shared_base;
+  std::vector<unsigned char> before_shared;
+  if (req.has_overlap) before_shared.assign(base, base + shared_size);
+#if defined(__SANITIZE_ADDRESS__)
+  for (std::size_t i = 0; i < 6; ++i) {
+    if ((req.poison && i < 3) || (req.poison_writes && i >= 3))
+      ASAN_POISON_MEMORY_REGION(buffers[i], sizes[i]);
+  }
+  if (req.poison && req.has_overlap) ASAN_POISON_MEMORY_REGION(base, shared_size);
+#endif
+  const int outcome = call_guarded([&] {
+    if constexpr (std::is_same_v<Out, std::uint16_t>) {
+      if (input_output_pair) {
+        const std::span<std::uint16_t> storage(typed_shared.get(), shared_size / 2);
+        const std::size_t input_offset = req.act_first == 0 ? req.in_offset : req.out_offset;
+        const std::size_t output_offset = req.act_first == 5 ? req.in_offset : req.out_offset;
+        q::expert_linear(storage.subspan(input_offset / 2, k), n,
+                         {buffers[1], sizes[1]}, {buffers[2], sizes[2]},
+                         {buffers[3], a_cap}, {buffers[4], sa_cap},
+                         storage.subspan(output_offset / 2, req.cap));
+        return;
+      }
+    }
+    q::expert_linear({reinterpret_cast<const std::uint16_t*>(buffers[0]), k}, n,
+                     {buffers[1], sizes[1]}, {buffers[2], sizes[2]},
+                     {buffers[3], a_cap}, {buffers[4], sa_cap},
+                     std::span<Out>(reinterpret_cast<Out*>(buffers[5]), req.cap));
+  });
+#if defined(__SANITIZE_ADDRESS__)
+  for (std::size_t i = 0; i < 6; ++i) ASAN_UNPOISON_MEMORY_REGION(buffers[i], sizes[i]);
+  if (req.has_overlap) ASAN_UNPOISON_MEMORY_REGION(base, shared_size);
+#endif
+  if (outcome != kOk) {
+    bool changed = req.has_overlap && buffer_changed(before_shared.data(), base, shared_size);
+    for (std::size_t i = 0; i < 6; ++i) changed |= buffer_changed(before[i].data(), buffers[i], sizes[i]);
+    return err_response(outcome, changed);
+  }
+  if (k > a_cap || k / 32 > sa_cap || n > req.cap) die("linear accepted undersized output");
+  const std::size_t used[] = {0, 0, 0, k, k / 32, buffer_bytes(n, sizeof(Out))};
+  const auto writable = [&](std::size_t offset) {
+    for (std::size_t i : {req.act_first, req.act_second}) {
+      if (i < 3) continue;
+      const std::size_t start = static_cast<std::size_t>(buffers[i] - base);
+      if (offset >= start && offset - start < used[i]) return true;
+    }
+    return false;
+  };
+  if (fault == "input-write" && k) buffers[0][0] ^= 1;
+  if (fault == "shared-gap-write" && req.has_overlap) {
+    for (std::size_t i = 0; i < shared_size; ++i) {
+      if (!writable(i)) { base[i] ^= 1; break; }
+    }
+  }
+  for (std::size_t i = 0; i < 6; ++i) {
+    if (i < 3 && buffer_changed(before[i].data(), buffers[i], sizes[i])) die("linear input changed on success");
+    if (req.has_overlap && (i == req.act_first || i == req.act_second)) continue;
+    if (buffer_changed(before[i].data() + used[i], buffers[i] + used[i], sizes[i] - used[i]))
+      die("linear bytes outside write ranges changed on success");
+  }
+  if (req.has_overlap) {
+    for (std::size_t i = 0; i < shared_size; ++i) {
+      if (!writable(i) && base[i] != before_shared[i]) die("linear bytes outside write ranges changed on success");
+    }
+  }
+  std::string response = "ok";
+  for (std::size_t i = 0; i < req.cap; ++i) {
+    Out value = 0;
+    std::memcpy(&value, buffers[5] + i * sizeof(Out), sizeof(value));
+    if (req.workspace) append_hex(response, static_cast<std::uint32_t>(value));
+    else append_hex(response, value);
+  }
+  if (req.workspace) {
+    for (std::size_t b : {3u, 4u}) {
+      for (std::size_t i = 0; i < sizes[b]; ++i) append_hex(response, static_cast<std::uint32_t>(buffers[b][i]));
+    }
+  }
+  return response;
+}
+
 using DequantFn32 = void (*)(std::span<const std::uint8_t>, q::Shape,
                              std::span<const std::uint8_t>, q::Shape, std::span<std::uint32_t>);
 using DequantFn16 = void (*)(std::span<const std::uint8_t>, q::Shape,
@@ -931,6 +1123,8 @@ std::string dispatch(const Request& req, std::string_view fault) {
   using u16 = std::uint16_t;
   using u32 = std::uint32_t;
   using i8 = std::int8_t;
+  if (req.op == "expert_linear_fp32") return run_linear<u32>(req, fault);
+  if (req.op == "expert_linear_bf16") return run_linear<u16>(req, fault);
   if (req.op == "act_quant" || req.op == "act_quant_trace") return run_act_quant(req, fault);
   if (req.op == "act_quant_dot_fp32") return run_act_combination<u32>(req);
   if (req.op == "act_quant_dot_bf16") return run_act_combination<u16>(req);
