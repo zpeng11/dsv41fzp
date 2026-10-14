@@ -106,6 +106,7 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.act_quant.harness` | 量化协议、trace 响应形状、执行器故障与 ASan 加毒有效性均传播到驱动失败 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
 | `tools.ckpt_inventory` | `tests/tools/test_ckpt_inventory.py`：合成 safetensors 上的每类结构与 index 拒绝、预期比对的缺失/多余/dtype/shape 检出、小配置的手算张量计数与 shape 抽查、扫描计数与逐元素朴素计数一致且不随分块与进程数变化 |
+| `tools.ckpt_expert` | `tests/tools/test_ckpt_expert.py`：合成 safetensors 的独立行字节与读取区间期望、权重/scale 配对、错误拒绝、生产组合 parity 和故障传播；通过 `df_quant_exec` 消费原始编码，不依赖真实 checkpoint |
 
 计算参照与动态激活量化参照的全部必选验收也可单独运行；从源码目录外运行时使用脚本绝对路径。两者仅依赖标准库，不初始化 Torch/TileLang/CUDA，不依赖目标机、权重、设备 dump 或网络；错误结果、异常或 skip 使命令非零退出。验证方法与契约分别以 [COMPUTE](COMPUTE.md) 与 [ACTQUANT](ACTQUANT.md) 为唯一来源。[代码][实测]
 
@@ -129,6 +130,18 @@ python3 tools/ckpt_inventory.py <snapshot> --scan --jobs 96 --progress --json bu
 ```
 
 第一条核对配置文件与镜像逐字节相同、shard 结构、index 与独立预期；第二条另做全量编码扫描，读完全部载荷，`--jobs` 按可用核心设置。退出码 0 表示全部检查通过，1 表示有检查失败，2 表示用法或 I/O 错误；JSON 与 TSV 是生成物，写入 git-ignore 的 `build/` 或 `scratch/`。结构规则 pin 于 `huggingface/safetensors@e246a256`；预期只由 `third_party/reference/inference/config.json` 与官方构造代码生成，每条规则的源码行号随 TSV 输出。工具仅依赖标准库，要求小端主机，码点分类经 `ref/formats`。结果归档于 [MODEL §2](MODEL.md#2-结构与格式) 的 [ckpt] 事实。[代码][实测]
+
+**真实专家权重消费**由 `tools/ckpt_expert.py` 显式执行；验收过程见 [P0018](../plan/p0018-checkpoint-expert-consumption.md)，验证链边界见 [MODEL §4](MODEL.md#4-精确性链条)。先按清点工具的结构、index、配置与独立预期核对全部头部，再只读取 `layers.0.ffn.experts.0` 的 w1/w3/w2 各首、中（`N // 2`）、末输出行及对应 scale，保留完整 K 维。张量偏移、dtype、shape 与名称配对错误、越界或短读均失败；不扫描其他权重载荷，不修改 checkpoint。[代码]
+
+```bash
+python3 tools/ckpt_expert.py <snapshot> --exe build/cpu-release/tests/quant/df_quant_exec --json build/ckpt-expert.json
+```
+
+输入为工具内固定整数位构造的 `mixed`、`group_ramp` 两组有限 BF16 模式，各矩阵独立运行。激活普通/trace、点积阶段与直接生产缓冲组合两类输出均对照既有 Python 参照；有限值、零与 Inf 按位比较，NaN 按 COMPUTE 分类比较。工具复用仓库测试协议连接，不是生产加载器或新的数值 oracle；执行器失败与计算拒绝不能算作 parity 通过。[代码]
+
+成功 JSON 记录快照 revision、源码 SHA/VERSION/dirty、实测运行环境、执行器路径与 SHA256、输入构造和原始位指纹、每段载荷的张量名/文件/绝对字节偏移/长度/SHA256、比较计数及两类输出。源码身份与执行器指纹分别记录，不能据前者推定任意外部二进制的构建身份。报告以独占创建写入，拒绝覆盖已有目标或写入 checkpoint 目录；复跑须指定新报告名。退出码 0 表示通过，1 表示验证失败，2 表示参数或 I/O 错误；缺权重不 skip。`--reference` 仅用于指定结构核对的配置来源，正式快照验证使用默认只读镜像。报告属生成物，不入库。[代码]
+
+`tools.ckpt_expert` 只在 CPU Debug/Release 注册，使用临时合成文件与当前构建的执行器；不扩大 quant 专用 sanitizer 范围。源码目录外运行上述入口时，脚本、快照、执行器和报告目标均使用绝对路径。[代码]
 
 `quant.compute` 与 `quant.act_quant` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
 

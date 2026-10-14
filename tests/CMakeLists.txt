@@ -23,3 +23,5 @@ df_add_python_test(quant.compute "${PROJECT_SOURCE_DIR}/tests/quant/test_compute
 df_add_python_test(quant.act_quant "${PROJECT_SOURCE_DIR}/tests/quant/test_act_quant.py")
 df_add_python_test(tools.check_repo "${PROJECT_SOURCE_DIR}/tests/tools/test_check_repo.py")
 df_add_python_test(tools.ckpt_inventory "${PROJECT_SOURCE_DIR}/tests/tools/test_ckpt_inventory.py")
+df_add_python_test(tools.ckpt_expert "${PROJECT_SOURCE_DIR}/tests/tools/test_ckpt_expert.py"
+  --exe $<TARGET_FILE:df_quant_exec>)
