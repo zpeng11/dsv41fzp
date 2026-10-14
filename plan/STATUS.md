@@ -11,6 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
+| [P0020 — 单 token FP4 专家 CPU 参照](p0020-expert-oracle.md) | active | 代码及 D0015 已审议通过；完成知识归档、提交后增量复现及合并收尾 |
 
 ## 已验收入口
 

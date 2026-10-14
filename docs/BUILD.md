@@ -87,6 +87,7 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `bb.contract.strict` / `bb.contract.fast_control` | 严格 target 不收缩；`-ffp-contract=fast` 对照版须收缩，证明探针敏感 |
 | `bb.compile_flags` | 从 `compile_commands.json` 验证严格选项只出现在应有的 target（含 `df_quant`，不含其执行器），全部 target 无 fast-math、`-march` 与 `-fsanitize` |
 | `quant.formats` | `tests/quant/test_formats.py` |
+| `quant.expert` | `tests/quant/test_expert.py`：独立 SiLU 区间与三矩阵逐阶段期望、错误链反例及环境检查；契约见 [EXPERT](EXPERT.md) |
 | `quant.compute` | `tests/quant/test_compute.py`：专家 FP8×packed FP4 单输出计算参照的独立逐阶段期望、输入契约、临时副本敏感性与失败传播 |
 | `quant.act_quant` | `tests/quant/test_act_quant.py`：BF16 动态激活量化参照的独立逐阶段期望、有限码点穷举、布局与计算组合、临时副本敏感性与失败传播 |
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
@@ -119,6 +120,8 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_compute.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_act_quant.py
 ```
+
+单专家参照可从任意目录用 `PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/quant/test_expert.py` 独立运行，或 configure 后执行 `ctest --test-dir <repo>/build/cpu-debug -R '^quant\.expert$' --output-on-failure --no-tests=error`（Release 换对应目录），无需 C++ 构建、权重或网络。仅收集该文件测试，导入既有测试模块只复用独立期望函数。环境探针限 ENV-A 的 glibc x86_64，其他平台会 skip，不能据此宣称完整验收；异常屏蔽及 sticky 边界见 [EXPERT §3](EXPERT.md#3-特殊值失败与环境)。[代码][实测]
 
 生产量化套件由上述三种 CPU preset 的 CTest 运行，也可单独调用驱动；`--suite` 取 `parity`、`contract`、`combination` 或 `harness`。临时生产变体敏感性单独运行，不进入每次 CTest，证据见 [P0017](../plan/p0017-act-quant-scalar.md)。以下命令不需要权重或 GPU；源码目录外运行时将脚本与执行器路径换成绝对路径。[代码]
 
@@ -160,7 +163,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/linear_sensitivity.py
 
 `tools.ckpt_expert` 与 `tools.ckpt_linear` 只在 CPU Debug/Release 注册，使用临时合成文件与当前构建的执行器；不扩大 quant 专用 sanitizer 范围。源码目录外运行上述入口时，脚本、快照、执行器和报告目标均使用绝对路径。[代码]
 
-`quant.compute` 与 `quant.act_quant` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
+`quant.compute`、`quant.act_quant` 与 `quant.expert` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
 
 `cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}`、`quant.linear.{parity,contract,harness,consumer}` 与 `quant.compile_flags`（验证 df_quant、df_quant_exec 与 df_linear_consumer 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。经协议调用的 quant 套件通过 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
