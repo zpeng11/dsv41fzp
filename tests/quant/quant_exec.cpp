@@ -1,5 +1,5 @@
 // Test executor for the production quant library (P0010 codec, P0011 dequant, P0013
-// compute). Not a production format.
+// compute, P0017 activation). Not a production format.
 //
 // Reads one request per stdin line and writes one response per line:
 //   codec:    <op> shape=<d0,d1,...> cap=<n> [alias] : <hex token> ...
@@ -8,6 +8,15 @@
 //   compute:  <op> cap=<n> [overlap=a|w|sa|sb [in_offset=<b>] [out_offset=<b>]] [poison]
 //             : <a codes> ... ; <w bytes> ... ; <scale_a codes> ... ; <scale_b codes> ...
 //   add_fp32: add_fp32 cap=<n> : <left fp32 bits> ... ; <right fp32 bits> ...
+//   activation: act_quant[_trace] cap=<a capacity> scale_cap=<scale capacity>
+//             [overlap=input_a|input_scale|outputs [in_offset=<b>] [out_offset=<b>]]
+//             [trace_alias=<buffer>,<buffer>|trace_object_alias] [poison]
+//             [trace_shape=<six lengths>]
+//             : <BF16 bits> ...
+//   combination: act_quant_dot_fp32|act_quant_dot_bf16 cap=<n>
+//             : <BF16 bits> ... ; <packed weights> ... ; <scale_b> ...
+//   Activation ok responses contain uint32 words: both complete output buffers,
+//   then (trace only) amax, bounded_amax, product, exponent, quotient, clamped.
 //   response: ok <hex output element> ...   (the whole output buffer, cap elements)
 //             err <invalid_argument|overflow_error> changed=<0|1>
 // Tokens are range-checked against the input element width before narrowing. The
@@ -40,8 +49,10 @@
 // SSE control word before the first request and verifies the control bits at exit;
 // overflow_unmasked also clears pending status flags. --status=clear|set starts with
 // all six status flags clear (default) or set, so a call that clears or raises a flag
-// breaks the full-MXCSR window either way. The `mxcsr` op reports the register. --fault=crash|exit|garbage|mismatch|drop deliberately breaks the executor
-// so the driver can prove that every such failure reaches CTest.
+// breaks the full-MXCSR window either way. The `mxcsr` op reports the register.
+// --fault=crash|exit|garbage|mismatch|drop deliberately breaks the executor;
+// input-write|shared-gap-write mutates activation storage after a successful call
+// but before snapshot checks, proving that write-contract failures reach CTest.
 
 #include <algorithm>
 #include <charconv>
@@ -52,11 +63,13 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include <xmmintrin.h>
 
@@ -65,6 +78,7 @@
 #endif
 
 #include "detail.h"
+#include "df/quant/act_quant.h"
 #include "df/quant/codec.h"
 #include "df/quant/compute.h"
 #include "df/quant/dequant.h"
@@ -87,6 +101,10 @@ struct Request {
   std::string op;
   std::vector<std::size_t> shape;
   std::vector<std::size_t> scale_shape;
+  std::size_t scale_cap = 0;
+  bool has_scale_cap = false;
+  std::vector<std::size_t> trace_shape;
+  bool has_trace_shape = false;
   std::size_t cap = 0;
   bool has_cap = false;
   bool has_shape = false;
@@ -95,7 +113,11 @@ struct Request {
   bool has_scale_shape = false;
   bool has_scale_section = false;
   bool has_overlap = false;
+  bool has_trace_alias = false;
+  bool trace_object_alias = false;
   std::size_t overlap = 0;
+  std::size_t act_first = 0;
+  std::size_t act_second = 1;
   bool has_in_offset = false;
   bool has_out_offset = false;
   std::size_t in_offset = 0;
@@ -107,6 +129,8 @@ struct Request {
 };
 
 constexpr std::string_view kComputeInputs[] = {"a", "w", "sa", "sb"};
+constexpr std::string_view kActBuffers[] = {"input", "a", "scale", "amax_bits",
+    "bounded_amax_bits", "product_bits", "exponent", "quotient_bits", "clamped_bits"};
 
 std::uint64_t parse_number(std::string_view text, int base) {
   std::uint64_t value = 0;
@@ -164,7 +188,15 @@ Request parse_request(std::string_view line) {
   req.op = std::string(head[0]);
   for (std::size_t i = 1; i < head.size(); ++i) {
     const std::string_view field = head[i];
-    if (field.starts_with("scale_shape=")) {
+    if (field.starts_with("scale_cap=")) {
+      if (req.has_scale_cap) die("duplicate scale_cap field");
+      req.scale_cap = parse_number(field.substr(10), 10);
+      req.has_scale_cap = true;
+    } else if (field.starts_with("trace_shape=")) {
+      if (req.has_trace_shape) die("duplicate trace_shape field");
+      req.trace_shape = parse_shape(field.substr(12));
+      req.has_trace_shape = true;
+    } else if (field.starts_with("scale_shape=")) {
       if (req.has_scale_shape) die("duplicate scale_shape field");
       req.scale_shape = parse_shape(field.substr(12));
       req.has_scale_shape = true;
@@ -185,10 +217,38 @@ Request parse_request(std::string_view line) {
     } else if (field.starts_with("overlap=")) {
       if (req.has_overlap) die("duplicate overlap field");
       const auto name = field.substr(8);
-      const auto* hit = std::find(std::begin(kComputeInputs), std::end(kComputeInputs), name);
-      if (hit == std::end(kComputeInputs)) die("unknown overlap input '" + std::string(name) + "'");
-      req.overlap = static_cast<std::size_t>(hit - std::begin(kComputeInputs));
+      if (req.op == "act_quant" || req.op == "act_quant_trace") {
+        if (name == "input_a") { req.act_first = 0; req.act_second = 1; }
+        else if (name == "input_scale") { req.act_first = 0; req.act_second = 2; }
+        else if (name == "outputs") { req.act_first = 1; req.act_second = 2; }
+        else die("unknown activation overlap");
+      } else {
+        const auto* hit = std::find(std::begin(kComputeInputs), std::end(kComputeInputs), name);
+        if (hit == std::end(kComputeInputs)) die("unknown overlap input '" + std::string(name) + "'");
+        req.overlap = static_cast<std::size_t>(hit - std::begin(kComputeInputs));
+      }
       req.has_overlap = true;
+    } else if (field == "trace_object_alias") {
+      if (req.op != "act_quant_trace") die("trace_object_alias requires trace entry");
+      if (req.trace_object_alias) die("duplicate trace_object_alias field");
+      req.trace_object_alias = true;
+    } else if (field.starts_with("trace_alias=")) {
+      if (req.op != "act_quant_trace") die("trace_alias requires trace entry");
+      if (req.has_trace_alias) die("duplicate trace_alias field");
+      const auto pair = field.substr(12);
+      const auto comma = pair.find(',');
+      if (comma == std::string_view::npos) die("trace_alias requires two buffer names");
+      const auto index = [](std::string_view buffer) {
+        const auto* hit = std::find(std::begin(kActBuffers), std::end(kActBuffers), buffer);
+        if (hit == std::end(kActBuffers)) die("unknown activation buffer");
+        return static_cast<std::size_t>(hit - std::begin(kActBuffers));
+      };
+      req.act_first = index(pair.substr(0, comma));
+      req.act_second = index(pair.substr(comma + 1));
+      if (req.act_first == req.act_second || (req.act_first < 3 && req.act_second < 3)) {
+        die("trace_alias needs distinct buffers including a trace stage");
+      }
+      req.has_trace_alias = true;
     } else if (field.starts_with("in_offset=")) {
       if (req.has_in_offset) die("duplicate in_offset field");
       req.in_offset = parse_number(field.substr(10), 10);
@@ -636,6 +696,216 @@ std::string run_add(const Request& req) {
   return ok_response(out.get(), req.cap);
 }
 
+// P0017 activation calls own exact-length buffers; every output, including trace
+// stages, is snapshotted before rejection, and poisoned inputs prove metadata order.
+std::size_t extent(std::size_t offset, std::size_t bytes) {
+  if (offset > std::numeric_limits<std::size_t>::max() - bytes) die("buffer extent overflow");
+  return offset + bytes;
+}
+
+void poison_activation(std::span<const std::uint16_t> input, bool poisoned) {
+#if defined(__SANITIZE_ADDRESS__)
+  if (poisoned) ASAN_POISON_MEMORY_REGION(input.data(), input.size_bytes());
+  else ASAN_UNPOISON_MEMORY_REGION(input.data(), input.size_bytes());
+#else
+  (void)input;
+  (void)poisoned;
+#endif
+}
+
+std::string run_act_quant(const Request& req, std::string_view fault) {
+  const bool traced = req.op == "act_quant_trace";
+  if (!req.has_cap || !req.has_scale_cap || req.has_shape || req.has_scale_shape ||
+      req.alias || req.scale_alias || (!traced && req.has_trace_shape)) {
+    die("activation request needs cap= and scale_cap=, and no foreign fields");
+  }
+  require_sections(req, 1, "activation");
+  if (req.has_overlap && req.has_trace_alias) die("overlap and trace_alias are mutually exclusive");
+  const bool shared_pair = req.has_overlap || req.has_trace_alias;
+  if ((req.has_in_offset || req.has_out_offset) && !shared_pair) die("offsets require an alias pair");
+  const std::size_t k = req.tokens.size();
+  if (req.trace_object_alias && (shared_pair || req.has_trace_shape || k != 64 ||
+                                req.cap != k || req.cap > sizeof(q::detail::ActQuantTrace))) {
+    die("trace_object_alias requires K=cap=64 and independent stage buffers");
+  }
+  std::vector<std::size_t> shape = {k / 32, k / 32, k / 32, k / 32, k, k};
+  if (req.has_trace_shape) {
+    if (req.trace_shape.size() != 6) die("trace_shape requires six lengths");
+    shape = req.trace_shape;
+  }
+  const std::size_t count = traced ? 9 : 3;
+  std::size_t lengths[9] = {buffer_bytes(k, 2), req.cap, req.scale_cap};
+  for (std::size_t i = 3; i < count; ++i) lengths[i] = buffer_bytes(shape[i - 3], 4);
+  std::unique_ptr<std::uint16_t[]> input_owner;
+  std::unique_ptr<std::uint8_t[]> byte_owner[2];
+  std::unique_ptr<std::uint32_t[]> stage_owner[6];
+  unsigned char* buffers[9] = {};
+  const auto delete_shared = [](void* ptr) { ::operator delete(ptr); };
+  std::unique_ptr<void, decltype(delete_shared)> shared(nullptr, delete_shared);
+  std::size_t shared_bytes = 0;
+  if (shared_pair) {
+    for (const auto& [index, offset] : {std::pair{req.act_first, req.in_offset},
+                                     std::pair{req.act_second, req.out_offset}}) {
+      const std::size_t alignment = index == 0 ? 2 : index < 3 ? 1 : 4;
+      if (offset % alignment) die("unaligned activation alias offset");
+      shared_bytes = std::max(shared_bytes, extent(offset, lengths[index]));
+    }
+    shared.reset(::operator new(shared_bytes));
+    std::memset(shared.get(), kFill, shared_bytes);
+    auto* base = reinterpret_cast<unsigned char*>(shared.get());
+    buffers[req.act_first] = base + req.in_offset;
+    buffers[req.act_second] = base + req.out_offset;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (buffers[i] != nullptr) continue;
+    if (i == 0) {
+      input_owner = std::make_unique<std::uint16_t[]>(k);
+      buffers[i] = reinterpret_cast<unsigned char*>(input_owner.get());
+    } else if (i < 3) {
+      byte_owner[i - 1] = std::make_unique<std::uint8_t[]>(lengths[i]);
+      buffers[i] = byte_owner[i - 1].get();
+    } else {
+      stage_owner[i - 3] = std::make_unique<std::uint32_t[]>(shape[i - 3]);
+      buffers[i] = reinterpret_cast<unsigned char*>(stage_owner[i - 3].get());
+    }
+  }
+  for (std::size_t i = 1; i < count; ++i) std::memset(buffers[i], kFill, lengths[i]);
+  for (std::size_t i = 0; i < k; ++i) {
+    const auto value = narrow_token<std::uint16_t>(req.tokens[i]);
+    std::memcpy(buffers[0] + i * 2, &value, 2);
+  }
+  auto* base = reinterpret_cast<unsigned char*>(shared.get());
+  auto* input = reinterpret_cast<std::uint16_t*>(buffers[0]);
+  auto* scale = buffers[2];
+  q::detail::ActQuantTrace trace;
+  if (traced) {
+    trace.amax_bits = {reinterpret_cast<std::uint32_t*>(buffers[3]), shape[0]};
+    trace.bounded_amax_bits = {reinterpret_cast<std::uint32_t*>(buffers[4]), shape[1]};
+    trace.product_bits = {reinterpret_cast<std::uint32_t*>(buffers[5]), shape[2]};
+    trace.exponent = {reinterpret_cast<std::int32_t*>(buffers[6]), shape[3]};
+    trace.quotient_bits = {reinterpret_cast<std::uint32_t*>(buffers[7]), shape[4]};
+    trace.clamped_bits = {reinterpret_cast<std::uint32_t*>(buffers[8]), shape[5]};
+  }
+  if (req.trace_object_alias) buffers[1] = reinterpret_cast<unsigned char*>(&trace);
+  auto* a = buffers[1];
+  std::vector<unsigned char> before[9];
+  for (std::size_t i = 0; i < count; ++i) {
+    before[i].assign(buffers[i], buffers[i] + lengths[i]);
+  }
+  std::vector<unsigned char> before_shared;
+  if (shared_pair) before_shared.assign(base, base + shared_bytes);
+  const auto* object_bytes = reinterpret_cast<const unsigned char*>(&trace);
+  const std::vector<unsigned char> before_object(object_bytes, object_bytes + sizeof(trace));
+  const std::span<const std::uint16_t> in(input, k);
+  if (req.poison) poison_activation(in, true);
+#if defined(__SANITIZE_ADDRESS__)
+  if (req.poison && shared_pair) ASAN_POISON_MEMORY_REGION(base, shared_bytes);
+#endif
+  const int outcome = call_guarded([&] {
+    if (traced) q::detail::trace_act_quant(in, {a, req.cap}, {scale, req.scale_cap}, trace);
+    else q::act_quant(in, {a, req.cap}, {scale, req.scale_cap});
+  });
+  if (req.poison) poison_activation(in, false);
+#if defined(__SANITIZE_ADDRESS__)
+  if (shared_pair) ASAN_UNPOISON_MEMORY_REGION(base, shared_bytes);
+#endif
+  if (outcome != kOk) {
+    bool changed = shared_pair && buffer_changed(before_shared.data(), base, shared_bytes);
+    for (std::size_t i = 0; i < count; ++i) {
+      changed |= buffer_changed(before[i].data(), buffers[i], lengths[i]);
+    }
+    if (req.trace_object_alias) {
+      changed |= buffer_changed(before_object.data(), &trace, sizeof(trace));
+    }
+    return err_response(outcome, changed);
+  }
+  const auto written_bytes = [&](std::size_t i) {
+    return i == 1 ? k : i == 2 ? k / 32 : lengths[i];
+  };
+  const auto shared_writable = [&](std::size_t offset) {
+    for (std::size_t i : {req.act_first, req.act_second}) {
+      if (i == 0) continue;
+      const std::size_t start = static_cast<std::size_t>(buffers[i] - base);
+      if (offset >= start && offset - start < written_bytes(i)) return true;
+    }
+    return false;
+  };
+  if (fault == "input-write") buffers[0][0] ^= 1;
+  if (fault == "shared-gap-write" && shared_pair) {
+    for (std::size_t i = 0; i < shared_bytes; ++i) {
+      if (!shared_writable(i)) {
+        base[i] ^= 1;
+        break;
+      }
+    }
+  }
+  if (buffer_changed(before[0].data(), buffers[0], lengths[0])) {
+    die("activation input changed on success");
+  }
+  for (std::size_t i = 1; i < count; ++i) {
+    if (shared_pair && (i == req.act_first || i == req.act_second)) continue;
+    const std::size_t used = written_bytes(i);
+    if (buffer_changed(before[i].data() + used, buffers[i] + used, lengths[i] - used)) {
+      die("activation bytes outside write ranges changed on success");
+    }
+  }
+  if (shared_pair) {
+    for (std::size_t i = 0; i < shared_bytes; ++i) {
+      if (!shared_writable(i) && base[i] != before_shared[i]) {
+        die("activation bytes outside write ranges changed on success");
+      }
+    }
+  }
+  if (req.trace_object_alias && buffer_changed(before_object.data() + k,
+                                               object_bytes + k, sizeof(trace) - k)) {
+    die("activation trace descriptor tail changed on success");
+  }
+  std::string response = "ok";
+  for (std::size_t i = 0; i < req.cap; ++i) append_hex(response, static_cast<std::uint32_t>(a[i]));
+  for (std::size_t i = 0; i < req.scale_cap; ++i) append_hex(response, static_cast<std::uint32_t>(scale[i]));
+  if (traced) {
+    for (std::size_t i = 0; i < 6; ++i) {
+      for (std::size_t j = 0; j < shape[i]; ++j) {
+        std::uint32_t value = 0;
+        std::memcpy(&value, buffers[i + 3] + j * 4, 4);
+        append_hex(response, value);
+      }
+    }
+  }
+  return response;
+}
+
+// P0017 composition exists only here: production activation buffers are passed
+// directly to the production grouped dot, without a driver round-trip or public API.
+template <class Out>
+std::string run_act_combination(const Request& req) {
+  if (!req.has_cap || req.has_scale_cap || req.has_trace_shape || req.has_shape ||
+      req.has_scale_shape || req.alias || req.scale_alias || has_compute_fields(req)) {
+    die("activation combination takes only cap=");
+  }
+  require_sections(req, 3, "activation combination");
+  const std::size_t k = req.sections[0].size();
+  const auto input = std::make_unique<std::uint16_t[]>(k);
+  for (std::size_t i = 0; i < k; ++i) input[i] = narrow_token<std::uint16_t>(req.sections[0][i]);
+  const auto a = std::make_unique<std::uint8_t[]>(k);
+  const auto scale = std::make_unique<std::uint8_t[]>(k / 32);
+  Request compute;
+  compute.sections = {{}, req.sections[1], {}, req.sections[2]};
+  auto in = compute_inputs(compute, nullptr);
+  const auto out = std::make_unique<Out[]>(req.cap);
+  const std::size_t bytes = buffer_bytes(req.cap, sizeof(Out));
+  std::memset(out.get(), kFill, bytes);
+  const std::vector<unsigned char> before(reinterpret_cast<unsigned char*>(out.get()),
+                                         reinterpret_cast<unsigned char*>(out.get()) + bytes);
+  const int outcome = call_guarded([&] {
+    q::act_quant({input.get(), k}, {a.get(), k}, {scale.get(), k / 32});
+    q::expert_grouped_dot({a.get(), k}, in.views[1], {scale.get(), k / 32}, in.views[3],
+                          std::span<Out>(out.get(), req.cap));
+  });
+  if (outcome != kOk) return err_response(outcome, buffer_changed(before.data(), out.get(), bytes));
+  return ok_response(out.get(), req.cap);
+}
+
 using DequantFn32 = void (*)(std::span<const std::uint8_t>, q::Shape,
                              std::span<const std::uint8_t>, q::Shape, std::span<std::uint32_t>);
 using DequantFn16 = void (*)(std::span<const std::uint8_t>, q::Shape,
@@ -656,11 +926,15 @@ constexpr DequantEntry kDequantOps[] = {
     {"dequantize_index_k", q::dequantize_index_k, q::dequantize_index_k},
 };
 
-std::string dispatch(const Request& req) {
+std::string dispatch(const Request& req, std::string_view fault) {
   using u8 = std::uint8_t;
   using u16 = std::uint16_t;
   using u32 = std::uint32_t;
   using i8 = std::int8_t;
+  if (req.op == "act_quant" || req.op == "act_quant_trace") return run_act_quant(req, fault);
+  if (req.op == "act_quant_dot_fp32") return run_act_combination<u32>(req);
+  if (req.op == "act_quant_dot_bf16") return run_act_combination<u16>(req);
+  if (req.has_scale_cap || req.has_trace_shape) die("activation fields on another request family");
   if (req.op == "asan") {
     const std::uint32_t value = kAsan ? 1 : 0;
     return ok_response(&value, 1);
@@ -749,7 +1023,8 @@ int main(int argc, char** argv) {
     }
   }
   if (fault != "none" && fault != "crash" && fault != "exit" && fault != "garbage" &&
-      fault != "mismatch" && fault != "drop") {
+      fault != "mismatch" && fault != "drop" && fault != "input-write" &&
+      fault != "shared-gap-write") {
     die("unknown --fault value '" + fault + "'");
   }
   if (status != "clear" && status != "set") {
@@ -766,9 +1041,10 @@ int main(int argc, char** argv) {
       continue;
     }
     if (fault == "crash") std::abort();
-    std::string response = dispatch(parse_request(line));
+    const Request req = parse_request(line);
+    std::string response = dispatch(req, fault);
     if (served == 0 && fault == "garbage") response = "zzz";
-    if (fault == "mismatch") response = corrupt(std::move(response));
+    if (fault == "mismatch" && req.op != "mxcsr") response = corrupt(std::move(response));
     if (!(fault == "drop" && std::cin.peek() == EOF)) {
       std::cout << response << '\n';
     }

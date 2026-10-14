@@ -1,14 +1,14 @@
 # ACTQUANT.md — 动态激活量化 CPU 参照契约
 
-本页定义模型实际调用的单行 BF16 激活量化规范。选择理由见 [D0010](../plan/decisions/d0010-act-quant-reference.md)，实施与验收证据见 [P0014](../plan/p0014-act-quant-oracle.md)，模型用途与格式只引用 [MODEL §2](MODEL.md#2-结构与格式)，格式定义只引用 [QUANT §2](QUANT.md#2-位模式与零符号)。本契约不宣称官方 GPU 逐位等价。
+本页定义模型实际调用的单行 BF16 激活量化规范。选择理由见 [D0010](../plan/decisions/d0010-act-quant-reference.md)，实施与验收证据见 [P0014](../plan/p0014-act-quant-oracle.md)，模型用途与格式只引用 [MODEL §2](MODEL.md#2-结构与格式)，格式定义只引用 [QUANT §2](QUANT.md#2-位模式与零符号)，验证链覆盖边界只见 [MODEL §4](MODEL.md#4-精确性链条)。
 
 ## 1. 来源与边界
 
-**来源标记**：**[代码]** 官方只读镜像（来源见 [PROVENANCE](../third_party/reference/PROVENANCE.md)）· **[格式]** QUANT · **[D]** D0010 接受的项目 CPU 语义 · **[参照]** [ref/act_quant.py](../ref/act_quant.py) · **[测试]** [tests/quant/test_act_quant.py](../tests/quant/test_act_quant.py)。以下数字是规格或算术约束，不是性能测量。
+**来源标记**：**[代码]** 官方只读镜像（来源见 [PROVENANCE](../third_party/reference/PROVENANCE.md)）· **[格式]** QUANT · **[D]** D0010 接受的项目 CPU 语义与 D0013 生产表示 · **[代码]** 本仓生产 C++ 与测试连接 · **[参照]** [ref/act_quant.py](../ref/act_quant.py) · **[测试]** [tests/quant/test_act_quant.py](../tests/quant/test_act_quant.py)。以下数字是规格或算术约束，不是性能测量。
 
 - `model.py:27–30,181–198` 指定 `act_quant(x, 32, "ue8m0", float8_e8m0fnu)`；FP4 与 FP8 线性层共用该入口，专家 w2 输入在 `model.py:841–851` 转回 BF16。[代码] 组大小取模型实际调用，不取 kernel 默认值。
 - `kernel.py:22–38,74–91` 给出 absmax、amax 下限、FP32 乘倒数、位域 ceil(log2)、幂 scale、商的 clamp 与 FP8/scale 写入阶段。[代码]
-- 只覆盖单行、固定组、非 inplace 的 BF16→E4M3FN+E8M0。矩阵/批量、FP32 输入、非幂 scale、128 元素组、inplace 量化后反量化、`fp4_act_quant`、权重量化和 checkpoint 转换均不在本契约内。[D]
+- 输入域限单行 BF16 原始位、每 32 元素一组、非 inplace 的 BF16→E4M3FN+E8M0，输出 scale 仅为 2 的整数次幂；验证链覆盖边界见 [MODEL §4](MODEL.md#4-精确性链条)。[D]
 
 ## 2. 输入、输出与失败
 
@@ -54,10 +54,21 @@ BF16 解码、amax、乘积、商、clamp、编码与 trace 均通过整数位�
 
 仅声明 [BUILD §1](BUILD.md#1-支持环境) 的 ENV-A，复现命令见 [BUILD §7](BUILD.md#7-测试清单)。[测试]
 
-期望使用标准库 `Fraction` 位域定义、精确算术与相邻编码距离比较，不调用被测解码、amax、scale、除法或编码辅助；scale 另由精确除以 448 的指数规则独立复核，每组及每元素的 trace 位与普通输出均检查。必选用例覆盖有限 BF16 amax 穷举、有限 BF16 元素量化、非有限拒绝、§3 所列边界与跨 128 元素布局，并把输出接入计算参照比较。敏感性只在临时源码副本注错，只接受指定用例的数值或阶段位比较失败为证据。用例清单、敏感性变体与门禁分类见 [P0014](../plan/p0014-act-quant-oracle.md)。[D][测试]
+期望使用标准库 `Fraction` 位域定义、精确算术与相邻编码距离比较，不调用被测解码、amax、scale、除法或编码辅助；scale 另由精确除以 448 的指数规则独立复核，每组及每元素的 trace 位与普通输出均检查。敏感性在临时源码副本注错；用例清单、敏感性变体与证据分类门禁只见 [P0014](../plan/p0014-act-quant-oracle.md)。[D][测试]
 
 ## 6. 验证链与待仲裁项
 
 本参照与 [COMPUTE](COMPUTE.md) 组合提供 BF16 激活出发的单输出 CPU 规范验证；组合只存在于测试，不新增组合入口，不修改既有格式、反量化或计算 oracle。覆盖与不覆盖范围见 [MODEL §4](MODEL.md#4-精确性链条) 覆盖矩阵。[D]
 
-官方 `reduce_absmax`/`T.max` 的 NaN 语义、编译后的 fast-math/FTZ、乘法与除法指令、FP8/E8M0 cast 的舍入与饱和、多行分块是否影响单行结果均待设备仲裁。生产 C++ 的接口、数值路径和模块归属另立决策，不从本页推定。[D]
+官方 `reduce_absmax`/`T.max` 的 NaN 语义、编译后的 fast-math/FTZ、乘法与除法指令、FP8/E8M0 cast 的舍入与饱和、多行分块是否影响单行结果均待设备仲裁。生产 C++ 的接口、整数数值路径和模块归属由 [D0013](../plan/decisions/d0013-act-quant-scalar.md) 决定，不由 Python 表示推定。[D]
+
+## 7. 生产 C++ scalar（src/quant）
+
+公共入口 [act_quant.h](../include/df/quant/act_quant.h) 接收 `std::span<const std::uint16_t>` BF16 原始位与两份 `std::span<std::uint8_t>` 输出，归入 `df_quant`；数值规格仍只见 §3。选择理由见 D0013，实现及验收证据见 [P0017](../plan/p0017-act-quant-scalar.md)，验收状态以该工作项为准。[D][代码]
+
+- 输入长度 K 为正且整除 32，输出容量至少 K 与 K/32；仅写 `a_codes` 与 `scale_a` 的结果前缀，额外容量不写。输入读取范围与两份输出实际写入范围须两两不重叠，精确相邻允许，未使用输出尾部不参与重叠判定。[D][代码]
+- 空输入、错误分组、容量不足、非有限 BF16 或禁止的重叠抛 `std::invalid_argument`。元数据、容量、字节数与重叠先于输入内容读取，全部输入有限性校验先于任一输出写入；拒绝时两份输出均不变。不增加浮点值输入或格式通用编码 API。[D][代码]
+- [act_quant.cpp](../src/quant/act_quant.cpp) 以原始位求 amax，复用既有整数有限乘法、binary32 构造与 RNE 移位，codec 私有 helper 编码有限已 clamp 的 binary32 位。普通与私有 trace 共用核心，全程不经宿主浮点、不读取或改变调用方浮点环境。[D][代码]
+- 私有 trace 记录每组 amax、下限后值、乘积位、指数及每元素商、clamp 后位，scale 与编码由同次输出提供。trace 长度须精确匹配 K 或组数，实际写入范围须与输入、两份输出写入前缀和其他 trace 范围互不重叠；形状与别名校验先于输入读取，拒绝时 trace 也不变。观测器不属于公共 API。[D][代码]
+- [test_act_quant_parity.py](../tests/quant/test_act_quant_parity.py) 直接以已验证的 `ref/act_quant.py` 为上一级，比较普通输出和全部阶段位；组合测试将生产输出直接交给生产分组点积，对照 Python 量化与计算参照组合，不新增生产组合接口。测试命令、MXCSR 矩阵与 sanitizer 范围见 [BUILD §7](BUILD.md#7-测试清单)。[D][代码]
+- [act_quant_sensitivity.py](../tests/quant/act_quant_sensitivity.py) 在临时生产源码副本注错，不修改工作树和 oracle；复现命令见 [BUILD §7](BUILD.md#7-测试清单)，指定检测用例、变体与证据分类门禁只见 [P0017](../plan/p0017-act-quant-scalar.md)。[D][代码]

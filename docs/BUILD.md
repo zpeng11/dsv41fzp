@@ -1,8 +1,8 @@
 # BUILD.md — CPU-only 构建与测试契约
 
-本页归档当前真实的 C++ 构建契约、操作命令与支持证据。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），验收过程与证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)、[P0010](../plan/p0010-quant-scalar-baseline.md)、[P0011](../plan/p0011-quant-dequant-scalar.md)、[P0012](../plan/p0012-expert-grouped-dot-oracle.md)、[P0014](../plan/p0014-act-quant-oracle.md) 与 [P0016](../plan/p0016-checkpoint-inventory.md)；计算与动态激活量化参照契约分别见 [COMPUTE](COMPUTE.md)、[ACTQUANT](ACTQUANT.md)，状态不在本页记录。
+本页归档 C++ 构建契约、操作命令与支持环境。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），构建基线证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)；数值入口的状态与验收证据由 [STATUS](../plan/STATUS.md) 路由，规格见各契约页。
 
-**来源标记**：**[D]** D0005/D0007 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
+**来源标记**：**[D]** D0005/D0007/D0013 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
 
 ## 1. 支持环境
 
@@ -43,7 +43,7 @@ ctest --preset cpu-debug
 
 Release 将三处 `cpu-debug` 换为 `cpu-release`。从其他目录运行测试用 `ctest --test-dir <repo>/build/<preset>`。[实测] 不启用 CUDA 语言，不需要 GPU、Torch/TileLang 或模型权重。[代码][实测]
 
-越界与未定义行为检查配置把三处换为 `cpu-asan`：Debug，`DF_SANITIZE=ON`、`DF_TEST_SCOPE=quant`，只构建 quant 生产库与测试执行器，只注册 quant C++ 测试与其编译选项检查。测试 preset 设 `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:exitcode=86` 与 `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`，任何 sanitizer 报告使对应测试失败。依赖 GCC 自带的 libasan/libubsan，实测于 §1 的 GCC 15.2.0；工具链缺这些库时构建失败，不 skip。临时注入的越界读被识别为 heap-buffer-overflow 并使 CTest 失败。[D][代码][实测]
+越界与未定义行为检查配置把三处换为 `cpu-asan`：Debug，`DF_SANITIZE=ON`、`DF_TEST_SCOPE=quant`，只构建 quant 生产库与测试执行器，只注册 quant C++ 测试与其编译选项检查。测试 preset 设 `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:exitcode=86` 与 `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`，任何 sanitizer 报告使对应测试失败。依赖 GCC 自带的 libasan/libubsan，实测于 §1 的 GCC 15.2.0；工具链缺这些库时构建失败，不 skip。注错检出证据见 [P0010](../plan/p0010-quant-scalar-baseline.md)。[D][代码][实测]
 
 ## 4. target 契约
 
@@ -100,6 +100,10 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.compute.contract` | 每类长度、内容与容量拒绝，ASan 下读前加毒的元数据拒绝，双向部分重叠拒绝与恰好相邻接受，失败时输出不变 |
 | `quant.compute.add` | 同一生产 FP32 加法 helper 的私有连接，定向舍入与 sticky 边界加固定种子补充 |
 | `quant.compute.harness` | 计算协议、trace 形状、超宽 token、未知输出模式、加毒有效性与执行器故障均传播到进程退出 |
+| `quant.act_quant.parity` | 生产 BF16 动态激活量化输出与全部私有阶段位，在八模式 MXCSR（状态位清空与预置）下对照 `ref/act_quant.py`，含有限码点穷举 |
+| `quant.act_quant.contract` | 长度、双输出容量、非有限、实际写入范围重叠、trace 形状与别名拒绝，失败输出不变；精确分配、相邻范围、未使用尾部共享与 ASan 输入加毒 |
+| `quant.act_quant.combination` | 执行器内生产量化结果直接供生产分组点积，两种输出对照 Python 量化和计算参照组合 |
+| `quant.act_quant.harness` | 量化协议、trace 响应形状、执行器故障与 ASan 加毒有效性均传播到驱动失败 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
 | `tools.ckpt_inventory` | `tests/tools/test_ckpt_inventory.py`：合成 safetensors 上的每类结构与 index 拒绝、预期比对的缺失/多余/dtype/shape 检出、小配置的手算张量计数与 shape 抽查、扫描计数与逐元素朴素计数一致且不随分块与进程数变化 |
 
@@ -108,6 +112,13 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_compute.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_act_quant.py
+```
+
+生产量化套件由上述三种 CPU preset 的 CTest 运行，也可单独调用驱动；`--suite` 取 `parity`、`contract`、`combination` 或 `harness`。临时生产变体敏感性单独运行，不进入每次 CTest，证据见 [P0017](../plan/p0017-act-quant-scalar.md)。以下命令不需要权重或 GPU；源码目录外运行时将脚本与执行器路径换成绝对路径。[代码]
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_act_quant_parity.py --exe build/cpu-release/tests/quant/df_quant_exec --suite parity
+PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/act_quant_sensitivity.py
 ```
 
 **真实 checkpoint 核对**不进 CTest（依赖本机快照与约 510 GB 数据），在仓库根目录执行；`<snapshot>` 为 HF 快照目录，本机为 `/mnt/pfs/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/2cba9e42aa026125f3ed06c6d98c1db82f7ca027`。[代码][实测]
@@ -121,8 +132,8 @@ python3 tools/ckpt_inventory.py <snapshot> --scan --jobs 96 --progress --json bu
 
 `quant.compute` 与 `quant.act_quant` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
 
-`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。三组 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
+`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}` 与 `quant.compile_flags`（验证两个 quant target 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。四组 quant 套件经 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
-**八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。`quant.dequant.{parity,multiply}`、`quant.compute.parity` 与 `quant.act_quant` 使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
+**八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。`quant.dequant.{parity,multiply}`、`quant.compute.parity`、`quant.act_quant` 与生产 `quant.act_quant.{parity,contract,combination}` 使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
 
 `bb.*` 工件只在 `tests/cpu/build_baseline/`，是构建基线的测试件，不是引擎模块。[代码] 仓库检查 `tools/check_repo.py` 仍按 AGENTS.md 工作流独立执行，不由 CTest 替代。

@@ -11,6 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
+| [P0017 — 单行动态激活量化生产 scalar 与组合 parity](p0017-act-quant-scalar.md) | active | 用户已验收，证据见工作项；待提交范围审计与已提交干净检出 |
 
 ## 已验收入口
 
@@ -23,7 +24,7 @@
 | `ref/act_quant.py` | [ACTQUANT](../docs/ACTQUANT.md) | [P0014](p0014-act-quant-oracle.md) |
 | `tools/ckpt_inventory.py` | [MODEL §2](../docs/MODEL.md#2-结构与格式) 的 [ckpt] 事实 | [P0016](p0016-checkpoint-inventory.md) |
 
-复现命令与 CTest 入口见 [BUILD §7](../docs/BUILD.md#7-测试清单)。尚未立项：生产动态激活量化、动态 KV 量化、同契约计算快路径、K-E1/K-E2 参照、SIMD/CUDA 与官方 GPU parity。
+复现命令与 CTest 入口见 [BUILD §7](../docs/BUILD.md#7-测试清单)。尚未立项：动态 KV 量化、同契约计算快路径、K-E1/K-E2 参照、SIMD/CUDA 与官方 GPU parity。
 
 ## 其他入口与阻塞
 

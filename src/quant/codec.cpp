@@ -81,6 +81,27 @@ std::uint32_t e4m3fn_bits(std::uint8_t code) {
   return sign | ((lead + 118u) << 23) | ((mantissa - (1u << lead)) << (23 - lead));
 }
 
+std::uint8_t encode_e4m3fn(std::uint32_t bits) noexcept {
+  const std::uint32_t sign = (bits >> 24) & 0x80u;
+  const unsigned field = (bits >> 23) & 0xFFu;
+  const std::uint32_t significand = (bits & 0x7FFFFFu) | (field == 0 ? 0 : 0x800000u);
+  if (significand == 0) {
+    return static_cast<std::uint8_t>(sign);
+  }
+  const int exponent = field == 0 ? -149 : static_cast<int>(field) - 150;
+  const int width = std::bit_width(significand);
+  int top = width - 1 + exponent;
+  if (top < -6) {
+    return static_cast<std::uint8_t>(sign | round_shift(significand, -9 - exponent));
+  }
+  std::uint64_t rounded = round_shift(significand, width - 4);
+  if (rounded == 16) {
+    rounded >>= 1;
+    ++top;
+  }
+  return static_cast<std::uint8_t>(sign | (static_cast<std::uint32_t>(top + 7) << 3) | (rounded & 7u));
+}
+
 }  // namespace detail
 
 namespace {

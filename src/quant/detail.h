@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <stdexcept>
 
-// Private building blocks shared by the production codec, dequantization (P0011) and
-// the expert grouped dot (P0013).
+// Private building blocks shared by the production codec, dequantization (P0011),
+// expert grouped dot (P0013) and activation quantization (P0017).
 namespace df::quant::detail {
 
 std::size_t element_count(Shape shape);
@@ -14,6 +14,12 @@ std::uint32_t e2m1_bits(std::uint8_t code);
 std::uint32_t e8m0_bits(std::uint8_t code);
 std::uint32_t e4m3fn_bits(std::uint8_t code);
 std::uint16_t bf16_rne(std::uint32_t bits);
+
+// RNE of significand * 2^-shift; left shifts must fit in uint64_t.
+std::uint64_t round_shift(std::uint64_t significand, int shift) noexcept;
+
+// E4M3FN RNE for finite binary32 bits already clamped to [-448, 448]; preserves zero sign.
+std::uint8_t encode_e4m3fn(std::uint32_t bits) noexcept;
 
 // Both operands must be finite binary32 bit patterns. Results use RNE, gradual
 // underflow and signed infinity on overflow, without touching the FP environment.
@@ -46,6 +52,22 @@ std::uint32_t trace_expert_grouped_dot(std::span<const std::uint8_t> a_codes,
                                        std::span<const std::uint8_t> scale_a,
                                        std::span<const std::uint8_t> scale_b,
                                        const DotTrace& trace);
+
+// Activation quantization stages: the first four spans hold K/32 entries, the last
+// two K entries. Codes and scales are supplied through the normal output spans.
+struct ActQuantTrace {
+  std::span<std::uint32_t> amax_bits;
+  std::span<std::uint32_t> bounded_amax_bits;
+  std::span<std::uint32_t> product_bits;
+  std::span<std::int32_t> exponent;
+  std::span<std::uint32_t> quotient_bits;
+  std::span<std::uint32_t> clamped_bits;
+};
+
+// Uses the public validation and computation core, with exact trace lengths and
+// trace writes disjoint from each other, the input and written output prefixes.
+void trace_act_quant(std::span<const std::uint16_t> input, std::span<std::uint8_t> a_codes,
+                     std::span<std::uint8_t> scale_a, const ActQuantTrace& trace);
 
 // Only the actually consumed prefixes participate; empty ranges never overlap.
 template <class In, class Out>
