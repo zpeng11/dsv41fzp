@@ -242,6 +242,7 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡][ckpt]；分解：专家 FP4 296
 | `ref/act_quant.py` | [ACTQUANT](ACTQUANT.md) | 同契约生产激活量化 scalar | K-X1 kernel（须经生产 scalar）、inplace/KV 量化、`fp4_act_quant`、权重量化、K-E1/K-E2、完整专家 MLP |
 | `df_quant` 单行激活量化 | [ACTQUANT §7](ACTQUANT.md#7-生产-c-scalarsrcquant) | 同契约激活量化快路径 | 上一行除 K-X1 kernel 外的边界同样适用；生产点积组合仅是同契约测试闭环 |
 | `tools/ckpt_inventory.py` | 本页 §2.1～§2.2 的 [ckpt] 事实；运行方法见 [BUILD §7](BUILD.md#7-测试清单) | 未来 `src/artifact` 读取器的张量清单 | 码点统计以外的数值语义、pack 格式与转换、读取性能、其他快照 |
+| `tools/ckpt_expert.py` | §2.1 路由专家行布局与既有 ACTQUANT/COMPUTE 契约；读取和运行约束见 [BUILD §7](BUILD.md#7-测试清单) | 真实权重选定行的集成验证入口，不新增数值 oracle；读取由独立合成字节验收，计算对照既有 Python 参照组合 | 未选权重载荷、真实模型激活、完整线性层/专家 MLP、生产 artifact 读取器；人工输入的局部 parity 不证明模型质量 |
 
 全部条目均不覆盖 SIMD/CUDA、官方 GPU 逐位等价、checkpoint 转换、K-E1 质量偏差与端到端一致；验证环境限 [BUILD §1](BUILD.md#1-支持环境) 的 ENV-A。
 

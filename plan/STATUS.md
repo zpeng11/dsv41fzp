@@ -11,6 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
+| [P0018 — 真实专家权重的 CPU 数值消费闭环](p0018-checkpoint-expert-consumption.md) | active | 实现、工作树回归与真实切片验证通过；待提交后干净检出复现及人工验收 |
 
 ## 已验收入口
 
