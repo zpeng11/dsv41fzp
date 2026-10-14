@@ -56,7 +56,7 @@ bf16_result = RNE_BF16(fp32_result)
 
 独立验收后的 Python 参照是 §6 生产 C++ scalar 的上一级；同契约快路径只对照 §6，不直接对照 Python 参照。该计算分支不是逐元素 dequant 的已验证后继。[D]
 
-覆盖与不覆盖范围见 [MODEL §4](MODEL.md#4-精确性链条) 覆盖矩阵。激活编码与 scale 的上游 CPU 规范见 [ACTQUANT](ACTQUANT.md)，本入口只消费给定编码与 scale，不生成它们。[D]
+覆盖与不覆盖范围见 [MODEL §4](MODEL.md#4-精确性链条) 覆盖矩阵。激活编码与 scale 的上游 CPU 规范见 [ACTQUANT](ACTQUANT.md)，本入口只消费给定编码与 scale，不生成它们。[D] 三矩阵与非线性的单专家参照组合见 [EXPERT](EXPERT.md)。
 
 ## 6. 生产 C++ scalar（`src/quant`）
 
