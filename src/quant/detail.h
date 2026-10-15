@@ -2,11 +2,12 @@
 
 #include "df/quant/codec.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 
 // Private building blocks shared by the production codec, dequantization (P0011),
-// expert grouped dot (P0013) and activation quantization (P0017).
+// expert grouped dot (P0013), activation quantization (P0017) and SwiGLU (P0021).
 namespace df::quant::detail {
 
 std::size_t element_count(Shape shape);
@@ -24,6 +25,9 @@ std::uint8_t encode_e4m3fn(std::uint32_t bits) noexcept;
 // Both operands must be finite binary32 bit patterns. Results use RNE, gradual
 // underflow and signed infinity on overflow, without touching the FP environment.
 std::uint32_t multiply_finite(std::uint32_t left, std::uint32_t right) noexcept;
+
+// One binary32 RNE multiplication of arbitrary bit patterns, including specials.
+std::uint32_t multiply_fp32(std::uint32_t left, std::uint32_t right) noexcept;
 
 // Rounds sign * significand * 2^exponent to binary32 with RNE, gradual underflow and
 // signed infinity on overflow; significand == 0 yields the signed zero.
@@ -68,6 +72,26 @@ struct ActQuantTrace {
 // trace writes disjoint from each other, the input and written output prefixes.
 void trace_act_quant(std::span<const std::uint16_t> input, std::span<std::uint8_t> a_codes,
                      std::span<std::uint8_t> scale_a, const ActQuantTrace& trace);
+
+struct SwigluTrace {
+  std::span<std::uint32_t> gate_bits;
+  std::span<std::uint32_t> up_bits;
+  std::span<std::uint32_t> silu_bits;
+  std::span<std::uint32_t> gated_bits;
+  std::span<std::uint32_t> weighted_bits;
+};
+
+void trace_swiglu(std::span<const std::uint16_t> gate, std::span<const std::uint16_t> up,
+                  std::span<std::uint16_t> out, const SwigluTrace& trace);
+void trace_swiglu(std::span<const std::uint16_t> gate, std::span<const std::uint16_t> up,
+                  std::uint32_t route_weight_bits, std::span<std::uint16_t> out,
+                  const SwigluTrace& trace);
+
+// Shared byte-range check behind public and trace SwiGLU entries. Read ranges may
+// overlap each other; every write range must be disjoint from both reads and all
+// earlier writes. Byte spans let the executor test mixed element types legally.
+void check_swiglu_storage(std::span<const std::byte> gate, std::span<const std::byte> up,
+                          std::span<const std::span<std::byte>> writes);
 
 // Only the actually consumed prefixes participate; empty ranges never overlap.
 template <class In, class Out>
