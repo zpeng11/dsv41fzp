@@ -1,4 +1,4 @@
-# Unified CTest entry (P0009–P0024): build baseline, quant and core suites.
+# Unified CTest entry (P0009–P0025): build baseline, quant and core suites.
 # Sanitizer scopes register only their selected subtree and compile-flag check.
 
 function(df_add_python_test name script)
@@ -32,6 +32,7 @@ df_add_python_test(quant.compute "${PROJECT_SOURCE_DIR}/tests/quant/test_compute
 df_add_python_test(quant.act_quant "${PROJECT_SOURCE_DIR}/tests/quant/test_act_quant.py")
 df_add_python_test(quant.expert "${PROJECT_SOURCE_DIR}/tests/quant/test_expert.py")
 df_add_python_test(core.router "${PROJECT_SOURCE_DIR}/tests/core/test_router.py")
+df_add_python_test(core.moe "${PROJECT_SOURCE_DIR}/tests/core/test_moe.py")
 df_add_python_test(core.router.expert "${PROJECT_SOURCE_DIR}/tests/core/test_router_expert.py"
   --exe $<TARGET_FILE:df_quant_exec>)
 df_add_python_test(tools.check_repo "${PROJECT_SOURCE_DIR}/tests/tools/test_check_repo.py")
