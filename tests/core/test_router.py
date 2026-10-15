@@ -689,8 +689,7 @@ class CertificationAndIndependenceTests(unittest.TestCase):
                     entry(mutable[0], mutable_gate, mutable[2],
                           image_token=True, bias_vl_bits=mutable[3])
             self.assertEqual(mutable, snapshot)
-        with patch.object(impl, "_INITIAL_PRECISION", 1), \
-             patch.object(impl, "_MAX_PRECISION", 1):
+        with patch.object(impl, "_MAX_PRECISION", 0):
             with self.assertRaises(ArithmeticError):
                 impl._softplus_fp32_bits(fp32(Fraction(-2)))
 
