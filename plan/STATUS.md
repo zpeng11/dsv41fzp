@@ -11,6 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
+| [P0024 — 单 token 主干 router 生产 scalar](p0024-router-scalar.md) | active | 用户已审议并授权提交合入；补齐已提交干净检出增量证据与范围审计后结项 |
 
 ## 已验收入口
 

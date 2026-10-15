@@ -1,5 +1,5 @@
-# Unified CTest entry (P0009–P0012): C++ build baseline, quant parity and Python suites.
-# DF_TEST_SCOPE=quant (cpu-asan) registers only the quant subtree and its flag check.
+# Unified CTest entry (P0009–P0024): build baseline, quant and core suites.
+# Sanitizer scopes register only their selected subtree and compile-flag check.
 
 function(df_add_python_test name script)
   add_test(NAME ${name} COMMAND "${Python3_EXECUTABLE}" "${script}" ${ARGN})
@@ -8,11 +8,20 @@ endfunction()
 
 set(DF_COMPILE_FLAGS_CHECK "${CMAKE_CURRENT_SOURCE_DIR}/cpu/build_baseline/check_compile_flags.py")
 
-add_subdirectory(quant)
+if(NOT DF_TEST_SCOPE STREQUAL "core")
+  add_subdirectory(quant)
+endif()
+if(NOT DF_TEST_SCOPE STREQUAL "quant")
+  add_subdirectory(core)
+endif()
 
 if(DF_TEST_SCOPE STREQUAL "quant")
   df_add_python_test(quant.compile_flags "${DF_COMPILE_FLAGS_CHECK}"
     --compile-commands "${PROJECT_BINARY_DIR}/compile_commands.json" --profile quant-sanitize)
+  return()
+elseif(DF_TEST_SCOPE STREQUAL "core")
+  df_add_python_test(core.compile_flags "${DF_COMPILE_FLAGS_CHECK}"
+    --compile-commands "${PROJECT_BINARY_DIR}/compile_commands.json" --profile core-sanitize)
   return()
 endif()
 
