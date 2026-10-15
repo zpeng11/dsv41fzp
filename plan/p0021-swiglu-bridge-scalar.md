@@ -1,10 +1,10 @@
 ---
 id: P0021
 title: 建立单 token SwiGLU 非线性桥的生产 CPU scalar 与逐阶段 parity
-status: active
+status: completed
 created: 2026-10-15
 updated: 2026-10-15
-knowledge: pending
+knowledge: updated
 docs: [docs/EXPERT.md, docs/BUILD.md, docs/MODEL.md]
 bench: []
 decisions: [D0015, D0016]
@@ -27,7 +27,7 @@ followups: []
 - [x] **环境与确定性**：依已接受生产 D，在 BUILD 的八模式 MXCSR、状态位清空与预置下覆盖普通、内部观测、接受及拒绝路径；结果不随调用方舍入/FTZ/DAZ 改变且不陷入，控制位、既有 sticky 位及可能新增状态严格按声明核对。不得由 Python Decimal 的环境边界推定生产实现行为。
 - [x] **错误检出与执行器边界**：定向生产变体至少覆盖遗漏/错误钳位、错误 SiLU 舍入、交换 gate/up、提前 BF16、融合或遗漏乘法、route weight 错放及特殊值错误处理，均由指定数值或阶段比较检出且有无故障基线；崩溃、协议错误、存储拒绝或 sanitizer 报告不算数值敏感性证据。
 - [x] **构建、复现与回归**：接入既有 CPU Debug/Release/ASan 体系及普通消费者链接测试，全套适用回归通过，无 skip、编译告警或非预期报告；已提交干净检出、自源码目录外复现，量化提交携带有效 `Oracle:`，严格检查与范围审计通过。不设置性能门槛，不作快路径论断。
-- [ ] **知识与人工收尾**：按 [D0011](decisions/d0011-doc-single-source.md) 将生产桥契约归 EXPERT、环境与测试入口归 BUILD、验证链增量归 MODEL §4，生产方案理由留新 D；用户评审实现、证据及知识处置后方可结项并同步 STATUS。
+- [x] **知识与人工收尾**：按 [D0011](decisions/d0011-doc-single-source.md) 将生产桥契约归 EXPERT、环境与测试入口归 BUILD、验证链增量归 MODEL §4，生产方案理由留新 D；用户评审实现、证据及知识处置后方可结项并同步 STATUS。
 
 ## 记录
 
@@ -51,15 +51,18 @@ followups: []
 - 2026-10-15：用户审阅草案通过，并批准含 D0016 的开工方案、必要 docs 更新、实现、验证与提交；D0016 转 accepted，本项转 active。
 - 2026-10-15：独立评审发现混型 span 构造、协议负例假阳性、全域故障参数遗漏及拒绝输入快照缺口；修复为共用字节校验、精确进程退出负控、参数传递与全存储快照，并补齐混型探针元数据前置保护。静态复核确认全部闭环，可提交；不代替用户验收。
 - 2026-10-15：回填时发现字节计数溢出分支无法经合法 span 构造触达；提取生产共用标量计数检查并以 64 位边界探针验收后补齐该项。
+- 2026-10-15：用户审议实现通过，授权依 D0011 精简归档并继续提交、合入；据此完成结项。
 
 ### 提交
 
 - `ed20ca2`：接受 D0016、登记 P0021 active 并同步 STATUS。
 - `b08ca28`：生产 SwiGLU 双重载、构建期 SiLU 表、执行器/consumer/parity/敏感性测试与 EXPERT/BUILD/MODEL 归档；携带 `Oracle: tests/quant/test_swiglu_parity.py`。
 - `c5634d1`：共用标量计数检查与边界溢出探针，补齐失败契约验收；携带同一 `Oracle:`。
+- `4179ad0`：回填最终工件的干净检出证据。
+- 结项提交依 D0011 精简 EXPERT §5、完成收尾记录并同步 STATUS；合并及 patch 递增由 Merge P0021 提交记录。
 
 ## 收尾
 
-- 验收或停止依据：active；除知识与人工收尾外七项验收已成立，最终工件的干净检出复现与范围审计通过（见最终证据）。待用户审议实现、证据及知识处置后结项并同步 STATUS；不以内部评审与机械检查代替人工验收。
-- 知识处置：pending；生产契约已写入 [EXPERT §5](../docs/EXPERT.md#5-生产-swiglu-bridge)，BUILD/MODEL 路由及 D0016 已到位，处置结论待用户审议。
-- 剩余义务：本项完成后，完整单 token FP4 专家生产实现仍须另立后续 P，组合 W1/W3、非线性桥、第二次量化与 W2，并独立处理三矩阵统一预校验、workspace 和失败原子性。
+- 验收或停止依据：八项验收成立；用户于 2026-10-15 审议通过并授权依 D0011 精简归档、提交与合入，最终工件 `c5634d1` 的干净检出复现及范围审计通过（见最终证据）。覆盖边界以 MODEL §4 为准，未将合成 CPU 证据扩作 GPU、真实模型、完整专家或性能论断。
+- 知识处置：updated；[EXPERT §5](../docs/EXPERT.md#5-生产-swiglu-bridge) 归档生产桥契约，[BUILD §7](../docs/BUILD.md#7-测试清单) 归档生成与命令，MODEL §4 归档覆盖边界，D0016 保留生产方案理由。
+- 剩余义务：无本项阻塞或移交义务，followups 为空；完整单 token FP4 专家生产实现须另立后续 P，组合 W1/W3、本桥、第二次量化与 W2，不重开本项。

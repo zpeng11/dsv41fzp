@@ -4,14 +4,13 @@
 
 ## 当前阶段
 
-**开发阶段初期：已有 CPU 上的格式、反量化、专家分组点积与单行动态激活量化参照及同契约生产 scalar，单 token 完整专家线性层与 FP4 专家 CPU 参照，以及官方 checkpoint 清点、真实专家选定行和完整 w1 验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
+**开发阶段初期：已有 CPU 上的格式、反量化、专家分组点积与单行动态激活量化参照及同契约生产 scalar，单 token 完整专家线性层、FP4 专家 CPU 参照与 SwiGLU 非线性桥生产 scalar，以及官方 checkpoint 清点、真实专家选定行和完整 w1 验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
 
 ## 当前工作项
 
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
-| [P0021 — 单 token SwiGLU 非线性桥生产 scalar](p0021-swiglu-bridge-scalar.md) | active | 实现与验证已提交（`c5634d1`），干净检出复现通过；待用户审议实现、证据与知识处置后结项，不提前实现完整专家 |
 
 ## 已验收入口
 
@@ -28,6 +27,7 @@
 | `tools/ckpt_expert.py` | [MODEL §4](../docs/MODEL.md#4-精确性链条) 的真实权重选定行验证边界；[BUILD §7](../docs/BUILD.md#7-测试清单) 的操作约束 | [P0018](p0018-checkpoint-expert-consumption.md) |
 | `df_quant` 专家线性层 | [COMPUTE §7](../docs/COMPUTE.md#7-单-token-专家线性层) | [P0019](p0019-expert-linear-scalar.md) |
 | `tools/ckpt_linear.py` | [MODEL §4](../docs/MODEL.md#4-精确性链条) 的完整 w1 验证边界；[BUILD §7](../docs/BUILD.md#7-测试清单) 的操作约束 | [P0019](p0019-expert-linear-scalar.md) |
+| `df_quant` SwiGLU bridge | [EXPERT §5](../docs/EXPERT.md#5-生产-swiglu-bridge) | [P0021](p0021-swiglu-bridge-scalar.md) |
 
 复现命令与 CTest 入口见 [BUILD §7](../docs/BUILD.md#7-测试清单)。尚未立项：动态 KV 量化、同契约计算快路径、K-E1/K-E2 参照、SIMD/CUDA 与官方 GPU parity。
 
