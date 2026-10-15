@@ -1,8 +1,8 @@
 # EXPERT.md — 单 token FP4 专家与 SwiGLU CPU 契约
 
-本页定义 `ref/expert.py` 的组合与非线性语义，以及同契约生产 SwiGLU bridge；输入量化只引用 [ACTQUANT](ACTQUANT.md)，逐行点积与线性输出转换只引用 [COMPUTE §3](COMPUTE.md#3-逐步计算与舍入)，格式只引用 [QUANT](QUANT.md)。参照选择见 [D0015](../plan/decisions/d0015-expert-oracle.md)，生产选择见 [D0016](../plan/decisions/d0016-swiglu-scalar.md)，实施证据见 [P0020](../plan/p0020-expert-oracle.md) 与 [P0021](../plan/p0021-swiglu-bridge-scalar.md)，验证链覆盖边界只见 [MODEL §4](MODEL.md#4-精确性链条)。
+本页定义 `ref/expert.py` 的组合与非线性语义，以及同契约生产 SwiGLU bridge 与完整专家；输入量化只引用 [ACTQUANT](ACTQUANT.md)，逐行点积与线性输出转换只引用 [COMPUTE §3](COMPUTE.md#3-逐步计算与舍入)，格式只引用 [QUANT](QUANT.md)。参照选择见 [D0015](../plan/decisions/d0015-expert-oracle.md)，生产选择见 [D0016](../plan/decisions/d0016-swiglu-scalar.md)、[D0017](../plan/decisions/d0017-expert-scalar.md)，实施证据由 [P0020](../plan/p0020-expert-oracle.md)、[P0021](../plan/p0021-swiglu-bridge-scalar.md)、[P0022](../plan/p0022-expert-scalar.md) 路由，验证链覆盖边界只见 [MODEL §4](MODEL.md#4-精确性链条)。
 
-**来源标记**：**[官方]** 只读镜像 `model.py:830–851`、`kernel.py:478–484,550–557`；**[D]** D0015/D0016 接受的 CPU 选择；**[实现]** `ref/expert.py` 与 `src/quant/swiglu.cpp`。下述数字为格式、算法或接口约束，不是性能测量；支持环境为 [BUILD §1](BUILD.md#1-支持环境) 的 ENV-A。
+**来源标记**：**[官方]** 只读镜像 `model.py:830–851`、`kernel.py:478–484,550–557`；**[D]** D0015/D0016/D0017 接受的 CPU 选择；**[实现]** `ref/expert.py`、`src/quant/swiglu.cpp` 与 `src/quant/expert.cpp`。下述数字为格式、算法或接口约束，不是性能测量；支持环境为 [BUILD §1](BUILD.md#1-支持环境) 的 ENV-A。
 
 ## 1. 接口与输入
 
@@ -52,3 +52,11 @@ SiLU 是实数函数一次正确舍入 FP32，**不是 exp/add/div 各自 FP32 �
 - `df::quant::swiglu(gate, up, out)` 与带 `route_weight_bits` 的重载消费等长 BF16 raw-bit span，返回写入 `out` 前缀的 BF16。无权重重载完全省略 §2 的可选乘法；带权重重载要求有限 FP32 raw bits，即使输入为空也先验证。输入可为空，两个只读 span 可重叠；实际输出前缀必须与两个输入读区间分离。[D][实现]
 - 输出容量至少为输入长度，只写该前缀。长度、容量、字节计数、重叠或非法权重抛 `std::invalid_argument`；全部元数据先于输入元素读取，全部拒绝先于写入，失败时完整输出 span 不变。非有限 gate/up 不作内容拒绝，按 §3 传播。[D][实现]
 - 生产 SiLU 只覆盖钳位后的有限域，不提供通用数学 API；以构建期全域表实现，生成物不入库。运行时钳位、查表、两次可能的 FP32 RNE 乘法与 BF16 RNE 均为整数位运算，不读写宿主浮点控制或状态。选择理由见 D0016，生成与命令见 [BUILD §7](BUILD.md#7-测试清单)。[D][实现]
+
+## 6. 生产完整专家
+
+- `df::quant::expert(input, w1, w2, w3, workspace, out)` 及显式 `route_weight_bits` 重载执行 §2，结果只为 BF16。`ExpertMatrix` 是含 N/K、packed 权重及 scale span 的只读视图，形状与布局沿用 §1；`ExpertWorkspace` 持有独立的 input/hidden codes 与 scales，以及 gate/up/hidden BF16 span。描述符按值快照，存储由调用方持有，不动态分配；工作区容量分别至少 D、D/32、H、H/32 和三个 H，out 至少 D，只写有效前缀。[D]
+- 全部维度、乘法/字节计数、容量、区间及观测形状检查先于元素读取；全部原始输入、三矩阵 scale 与 route weight 拒绝先于第一处写入。约定拒绝抛 `std::invalid_argument`。参数错误时完整 out、workspace 与观测缓冲不变；非法对象/span 或并发修改不在保证内。[D]
+- 有效写入前缀互不重叠并与全部输入读取区间分离，只读区间可重叠。完整 out span（含容量尾部）还须与全部有效 scratch/观测写区间分离。未使用 scratch 尾部不作为写区间，未使用 out 尾部可与只读输入重叠；不变区域按全部有效写区间的并集判定，精确相邻可接受。[D]
+- 运行中 hidden 非有限在第二次激活量化边界拒绝，完整 out 与只读输入不变，scratch/观测的有效前缀可能已改变，不构成可消费结果；其余特殊值边界沿用 §3。W2 是唯一正式输出写入阶段，预检覆盖其外部拒绝条件，量化保证其内部编码合法，不产生因后续行拒绝而暴露的部分 out。[D]
+- 两次量化分别调用既有 `act_quant`，W1/W3 共享第一套编码，各矩阵逐行调用 BF16 `expert_grouped_dot`，非线性直接调用 §5。私有观测与普通入口共享执行核心，工作区保留边界张量，仅额外复用桥内 FP32 阶段，不增加整矩阵点积 trace。生产成功、观测及拒绝路径均不读写宿主浮点环境，完整 MXCSR 不变。[D]

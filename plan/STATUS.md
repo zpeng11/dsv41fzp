@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-**开发阶段初期：已有 CPU 上的格式、反量化、专家分组点积与单行动态激活量化参照及同契约生产 scalar，单 token 完整专家线性层、FP4 专家 CPU 参照与 SwiGLU 非线性桥生产 scalar，以及官方 checkpoint 清点、真实专家选定行和完整 w1 验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
+**开发阶段初期：已有 CPU 格式、反量化、专家分组点积与动态激活量化参照及生产 scalar，单 token 线性层、SwiGLU 桥与完整 FP4 专家生产 scalar，以及官方 checkpoint 清点、选定行、完整 w1 和固定专家三矩阵验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
 
 ## 当前工作项
 
@@ -28,6 +28,8 @@
 | `df_quant` 专家线性层 | [COMPUTE §7](../docs/COMPUTE.md#7-单-token-专家线性层) | [P0019](p0019-expert-linear-scalar.md) |
 | `tools/ckpt_linear.py` | [MODEL §4](../docs/MODEL.md#4-精确性链条) 的完整 w1 验证边界；[BUILD §7](../docs/BUILD.md#7-测试清单) 的操作约束 | [P0019](p0019-expert-linear-scalar.md) |
 | `df_quant` SwiGLU bridge | [EXPERT §5](../docs/EXPERT.md#5-生产-swiglu-bridge) | [P0021](p0021-swiglu-bridge-scalar.md) |
+| `df_quant` 完整 FP4 专家 | [EXPERT §6](../docs/EXPERT.md#6-生产完整专家) | [P0022](p0022-expert-scalar.md) |
+| `tools/ckpt_expert_mlp.py` | [MODEL §4](../docs/MODEL.md#4-精确性链条) 的固定专家完整三矩阵边界；[BUILD §7](../docs/BUILD.md#7-测试清单) 的操作约束 | [P0022](p0022-expert-scalar.md) |
 
 复现命令与 CTest 入口见 [BUILD §7](../docs/BUILD.md#7-测试清单)。尚未立项：动态 KV 量化、同契约计算快路径、K-E1/K-E2 参照、SIMD/CUDA 与官方 GPU parity。
 

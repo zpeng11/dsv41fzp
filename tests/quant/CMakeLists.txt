@@ -28,6 +28,10 @@ add_executable(df_swiglu_consumer swiglu_consumer.cpp)
 target_link_libraries(df_swiglu_consumer PRIVATE df_quant df_cxx_baseline df_sanitize)
 add_test(NAME quant.swiglu.consumer COMMAND df_swiglu_consumer)
 
+add_executable(df_expert_consumer expert_consumer.cpp)
+target_link_libraries(df_expert_consumer PRIVATE df_quant df_cxx_baseline df_sanitize)
+add_test(NAME quant.expert.consumer COMMAND df_expert_consumer)
+
 foreach(_suite IN ITEMS parity contract harness)
   df_add_python_test(quant.linear.${_suite} "${CMAKE_CURRENT_SOURCE_DIR}/test_linear_parity.py"
     --exe "$<TARGET_FILE:df_quant_exec>" --suite ${_suite})
@@ -35,6 +39,11 @@ endforeach()
 
 foreach(_suite IN ITEMS parity contract harness)
   df_add_python_test(quant.swiglu.${_suite} "${CMAKE_CURRENT_SOURCE_DIR}/test_swiglu_parity.py"
+    --exe "$<TARGET_FILE:df_quant_exec>" --suite ${_suite})
+endforeach()
+
+foreach(_suite IN ITEMS parity contract harness)
+  df_add_python_test(quant.expert.${_suite} "${CMAKE_CURRENT_SOURCE_DIR}/test_expert_parity.py"
     --exe "$<TARGET_FILE:df_quant_exec>" --suite ${_suite})
 endforeach()
 

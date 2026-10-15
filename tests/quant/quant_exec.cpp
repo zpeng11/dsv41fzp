@@ -67,6 +67,7 @@
 // but before snapshot checks, proving that write-contract failures reach CTest.
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstdint>
 #include <cstdio>
@@ -94,6 +95,7 @@
 #include "df/quant/codec.h"
 #include "df/quant/compute.h"
 #include "df/quant/dequant.h"
+#include "df/quant/expert.h"
 #include "df/quant/linear.h"
 #include "df/quant/swiglu.h"
 
@@ -117,6 +119,8 @@ struct Request {
   std::vector<std::size_t> scale_shape;
   std::size_t scale_cap = 0;
   bool has_scale_cap = false;
+  std::size_t input_count = 0;
+  bool has_input_count = false;
   std::vector<std::size_t> trace_shape;
   bool has_trace_shape = false;
   std::size_t cap = 0;
@@ -138,7 +142,10 @@ struct Request {
   std::size_t out_offset = 0;
   bool poison = false;
   bool poison_writes = false;
+  bool runtime_failure = false;
   bool workspace = false;
+  std::vector<std::size_t> work_shape;
+  bool has_work_shape = false;
   bool has_route = false;
   std::uint32_t route = 0;
   bool has_a_cap = false;
@@ -152,6 +159,12 @@ constexpr std::string_view kLinearBuffers[] = {"input", "w", "sb", "a", "sa", "o
 constexpr std::string_view kComputeInputs[] = {"a", "w", "sa", "sb"};
 constexpr std::string_view kSwigluBuffers[] = {"gate", "up", "out", "gate_bits", "up_bits",
                                                "silu_bits", "gated_bits", "weighted_bits"};
+constexpr std::string_view kExpertBuffers[] = {
+    "input", "w1packed", "w1scale", "w2packed", "w2scale", "w3packed", "w3scale",
+    "input_codes", "input_scales", "gate", "up", "hidden", "hidden_codes",
+    "hidden_scales", "out", "gate_bits", "up_bits", "silu_bits", "gated_bits",
+    "weighted_bits"};
+constexpr std::string_view kExpertStorageBuffers[] = {"read", "scratch", "out"};
 
 bool is_linear(const Request& req) {
   return req.op == "expert_linear_fp32" || req.op == "expert_linear_bf16";
@@ -159,6 +172,10 @@ bool is_linear(const Request& req) {
 
 bool is_swiglu(const Request& req) {
   return req.op == "swiglu" || req.op == "swiglu_trace";
+}
+
+bool is_expert(const Request& req) {
+  return req.op == "expert_bf16" || req.op == "expert_trace";
 }
 constexpr std::string_view kActBuffers[] = {"input", "a", "scale", "amax_bits",
     "bounded_amax_bits", "product_bits", "exponent", "quotient_bits", "clamped_bits"};
@@ -220,7 +237,7 @@ Request parse_request(std::string_view line) {
   for (std::size_t i = 1; i < head.size(); ++i) {
     const std::string_view field = head[i];
     if (field.starts_with("route=")) {
-      if (!is_swiglu(req) || req.has_route) die("invalid or duplicate route");
+      if ((!is_swiglu(req) && !is_expert(req)) || req.has_route) die("invalid or duplicate route");
       const std::uint64_t value = parse_number(field.substr(6), 16);
       if (value > std::numeric_limits<std::uint32_t>::max()) die("route exceeds FP32 width");
       req.route = static_cast<std::uint32_t>(value);
@@ -233,12 +250,25 @@ Request parse_request(std::string_view line) {
       if (!is_linear(req) || req.workspace) die("invalid or duplicate workspace");
       req.workspace = true;
     } else if (field == "poison_writes") {
-      if (!is_linear(req) || req.poison_writes) die("invalid or duplicate poison_writes");
+      if ((!is_linear(req) && !is_expert(req)) || req.poison_writes) die("invalid or duplicate poison_writes");
       req.poison_writes = true;
+    } else if (field == "runtime_failure") {
+      if (!is_expert(req) || req.runtime_failure) die("invalid or duplicate runtime_failure");
+      req.runtime_failure = true;
+    } else if (field.starts_with("input_count=")) {
+      if (!req.op.starts_with("expert_counts") || req.has_input_count)
+        die("invalid or duplicate input_count");
+      req.input_count = parse_number(field.substr(12), 10);
+      req.has_input_count = true;
     } else if (field.starts_with("scale_cap=")) {
       if (req.has_scale_cap) die("duplicate scale_cap field");
       req.scale_cap = parse_number(field.substr(10), 10);
       req.has_scale_cap = true;
+    } else if (field.starts_with("work_shape=")) {
+      if ((!is_expert(req) && req.op != "expert_storage") || req.has_work_shape)
+        die("invalid or duplicate work_shape");
+      req.work_shape = parse_shape(field.substr(11));
+      req.has_work_shape = true;
     } else if (field.starts_with("trace_shape=")) {
       if (req.has_trace_shape) die("duplicate trace_shape field");
       req.trace_shape = parse_shape(field.substr(12));
@@ -264,7 +294,7 @@ Request parse_request(std::string_view line) {
     } else if (field.starts_with("overlap=")) {
       if (req.has_overlap) die("duplicate overlap field");
       const auto name = field.substr(8);
-      if (is_linear(req) || is_swiglu(req)) {
+      if (is_linear(req) || is_swiglu(req) || is_expert(req) || req.op == "expert_storage") {
         const auto comma = name.find(',');
         if (comma == std::string_view::npos) die("overlap needs two buffers");
         const auto index = [&](std::string_view value) {
@@ -272,6 +302,17 @@ Request parse_request(std::string_view line) {
             const auto* hit = std::find(std::begin(kLinearBuffers), std::end(kLinearBuffers), value);
             if (hit == std::end(kLinearBuffers)) die("unknown linear buffer");
             return static_cast<std::size_t>(hit - std::begin(kLinearBuffers));
+          }
+          if (is_expert(req)) {
+            const auto* hit = std::find(std::begin(kExpertBuffers), std::end(kExpertBuffers), value);
+            if (hit == std::end(kExpertBuffers)) die("unknown expert buffer");
+            return static_cast<std::size_t>(hit - std::begin(kExpertBuffers));
+          }
+          if (req.op == "expert_storage") {
+            const auto* hit = std::find(std::begin(kExpertStorageBuffers),
+                                        std::end(kExpertStorageBuffers), value);
+            if (hit == std::end(kExpertStorageBuffers)) die("unknown expert storage buffer");
+            return static_cast<std::size_t>(hit - std::begin(kExpertStorageBuffers));
           }
           const auto* hit = std::find(std::begin(kSwigluBuffers), std::end(kSwigluBuffers), value);
           if (hit == std::end(kSwigluBuffers)) die("unknown SwiGLU buffer");
@@ -1332,6 +1373,318 @@ std::string run_linear(const Request& req, std::string_view fault) {
   return response;
 }
 
+std::string run_expert_storage(const Request& req) {
+  if (!req.has_cap || !req.has_work_shape || req.work_shape.size() != 4 || req.has_shape ||
+      req.has_scale_shape || req.has_scale_cap || req.has_a_cap || req.workspace || req.alias ||
+      req.scale_alias || req.poison || req.poison_writes || req.runtime_failure || !req.has_overlap ||
+      req.has_trace_alias || req.trace_object_alias || req.has_route || req.has_trace_shape ||
+      !req.has_in_offset || !req.has_out_offset || req.has_input_count) {
+    die("expert_storage requires cap=, work_shape=read,write,out,out_write and overlap=");
+  }
+  require_sections(req, 1, "expert_storage");
+  if (!req.sections[0].empty()) die("expert_storage takes no payload");
+  const std::size_t read_size = req.work_shape[0];
+  const std::size_t write_size = req.work_shape[1];
+  const std::size_t out_size = req.work_shape[2];
+  const std::size_t out_write = req.work_shape[3];
+  if (req.cap != out_size) die("expert_storage cap must equal out byte size");
+  const std::size_t sizes[] = {read_size, write_size, out_size};
+  if (req.act_first >= 3 || req.act_second >= 3) die("expert_storage overlap uses input_codes,input_scales,gate");
+  const std::size_t total = std::max(extent(req.in_offset, sizes[req.act_first]),
+                                     extent(req.out_offset, sizes[req.act_second]));
+  const auto raw = std::make_unique<std::byte[]>(total);
+  std::unique_ptr<std::byte[]> owners[3];
+  std::span<std::byte> buffers[3];
+  buffers[req.act_first] = {raw.get() + req.in_offset, sizes[req.act_first]};
+  buffers[req.act_second] = {raw.get() + req.out_offset, sizes[req.act_second]};
+  for (std::size_t i = 0; i < 3; ++i) {
+    if (i == req.act_first || i == req.act_second) continue;
+    owners[i] = std::make_unique<std::byte[]>(sizes[i]);
+    buffers[i] = {owners[i].get(), sizes[i]};
+  }
+  const std::array<std::span<const std::byte>, 1> reads{buffers[0]};
+  const std::array<std::span<std::byte>, 1> writes{buffers[1]};
+  const int outcome = call_guarded([&] {
+    q::detail::check_expert_storage(reads, writes, buffers[2], out_write);
+  });
+  if (outcome != kOk) return err_response(outcome, false);
+  return "ok";
+}
+
+std::string run_expert_counts(const Request& req, bool traced) {
+  if (!req.has_cap || !req.has_input_count || !req.has_shape || req.shape.size() != 6 || req.has_work_shape ||
+      req.has_scale_shape || req.has_scale_cap || req.has_a_cap || req.workspace || req.alias ||
+      req.scale_alias || req.poison || req.poison_writes || req.runtime_failure || req.has_overlap ||
+      req.has_trace_alias || req.trace_object_alias || req.has_route || req.has_trace_shape ||
+      req.has_in_offset || req.has_out_offset) {
+    die("expert_counts requires shape=w1N,w1K,w2N,w2K,w3N,w3K and cap=out_count");
+  }
+  require_sections(req, 1, "expert_counts");
+  if (!req.sections[0].empty()) die("expert_counts takes no payload");
+  q::detail::ExpertCounts counts{};
+  const int outcome = call_guarded([&] {
+    counts = q::detail::check_expert_counts(req.input_count, req.shape[0], req.shape[1],
+                                            req.shape[2], req.shape[3], req.shape[4],
+                                            req.shape[5], req.cap, traced);
+  });
+  if (outcome != kOk) return err_response(outcome, false);
+  const std::size_t values[] = {counts.input_groups, counts.hidden_groups,
+      counts.w1_weight_bytes, counts.w1_scale_bytes, counts.w2_weight_bytes,
+      counts.w2_scale_bytes, counts.w3_weight_bytes, counts.w3_scale_bytes};
+  return ok_response(values, std::size(values));
+}
+
+std::string run_expert(const Request& req, std::string_view fault) {
+  const bool traced = req.op == "expert_trace";
+  if (!req.has_cap || !req.has_shape || req.shape.size() != 6 || !req.has_work_shape ||
+      req.work_shape.size() != 7 || req.has_scale_shape || req.has_scale_cap || req.has_a_cap ||
+      req.workspace || req.alias || req.scale_alias || req.has_trace_alias ||
+      req.trace_object_alias || (!traced && req.has_trace_shape)) {
+    die("expert requires six matrix dimensions, seven workspace capacities and no foreign fields");
+  }
+  require_sections(req, 7, "expert");
+  if ((req.has_in_offset || req.has_out_offset) && !req.has_overlap)
+    die("expert offsets require overlap");
+  if (traced && req.has_trace_shape && req.trace_shape.size() != 5)
+    die("expert trace_shape requires five lengths");
+
+  const std::size_t input_count = req.sections[0].size();
+  const std::size_t trace_count = traced ? 5 : 0;
+  const std::size_t count = 15 + trace_count;
+  std::vector<std::size_t> sizes(count);
+  sizes[0] = buffer_bytes(input_count, 2);
+  for (std::size_t i = 1; i < 7; ++i) sizes[i] = req.sections[i].size();
+  sizes[7] = req.work_shape[0];
+  sizes[8] = req.work_shape[1];
+  sizes[9] = buffer_bytes(req.work_shape[2], 2);
+  sizes[10] = buffer_bytes(req.work_shape[3], 2);
+  sizes[11] = buffer_bytes(req.work_shape[4], 2);
+  sizes[12] = req.work_shape[5];
+  sizes[13] = req.work_shape[6];
+  sizes[14] = buffer_bytes(req.cap, 2);
+  if (traced) {
+    const std::vector<std::size_t> shape = req.has_trace_shape ? req.trace_shape
+                                                               : std::vector<std::size_t>(5, req.shape[0]);
+    for (std::size_t i = 0; i < 5; ++i) sizes[15 + i] = buffer_bytes(shape[i], 4);
+  }
+  const std::size_t widths[] = {2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 2,
+                                4, 4, 4, 4, 4};
+  std::vector<std::unique_ptr<std::uint8_t[]>> byte_owners(count);
+  std::vector<std::unique_ptr<std::uint16_t[]>> half_owners(count);
+  std::vector<std::unique_ptr<std::uint32_t[]>> word_owners(count);
+  std::unique_ptr<std::uint8_t[]> shared_bytes;
+  std::unique_ptr<std::uint16_t[]> shared_halves;
+  std::unique_ptr<std::uint32_t[]> shared_words;
+  std::vector<unsigned char*> buffers(count, nullptr);
+  unsigned char* shared_base = nullptr;
+  std::size_t shared_size = 0;
+  if (req.has_overlap) {
+    if (req.act_first >= count || req.act_second >= count)
+      die("expert overlap names an unavailable buffer");
+    if (widths[req.act_first] != widths[req.act_second])
+      die("mixed expert overlap requires expert_storage byte probe");
+    const std::size_t width = widths[req.act_first];
+    for (const auto& [index, offset] : {std::pair{req.act_first, req.in_offset},
+                                       std::pair{req.act_second, req.out_offset}}) {
+      if (offset % width) die("unaligned expert overlap offset");
+      shared_size = std::max(shared_size, extent(offset, sizes[index]));
+    }
+    if (shared_size % width) die("expert shared extent is not element aligned");
+    if (width == 1) {
+      shared_bytes = std::make_unique<std::uint8_t[]>(shared_size);
+      shared_base = shared_bytes.get();
+    } else if (width == 2) {
+      shared_halves = std::make_unique<std::uint16_t[]>(shared_size / 2);
+      shared_base = reinterpret_cast<unsigned char*>(shared_halves.get());
+    } else {
+      shared_words = std::make_unique<std::uint32_t[]>(shared_size / 4);
+      shared_base = reinterpret_cast<unsigned char*>(shared_words.get());
+    }
+    std::memset(shared_base, kFill, shared_size);
+    buffers[req.act_first] = shared_base + req.in_offset;
+    buffers[req.act_second] = shared_base + req.out_offset;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (!buffers[i]) {
+      if (widths[i] == 1) {
+        byte_owners[i] = std::make_unique<std::uint8_t[]>(sizes[i]);
+        buffers[i] = byte_owners[i].get();
+      } else if (widths[i] == 2) {
+        half_owners[i] = std::make_unique<std::uint16_t[]>(sizes[i] / 2);
+        buffers[i] = reinterpret_cast<unsigned char*>(half_owners[i].get());
+      } else {
+        word_owners[i] = std::make_unique<std::uint32_t[]>(sizes[i] / 4);
+        buffers[i] = reinterpret_cast<unsigned char*>(word_owners[i].get());
+      }
+      std::memset(buffers[i], kFill, sizes[i]);
+    }
+  }
+  for (std::size_t i = 0; i < input_count; ++i) {
+    const auto value = narrow_token<std::uint16_t>(req.sections[0][i]);
+    std::memcpy(buffers[0] + 2 * i, &value, 2);
+  }
+  for (std::size_t section = 1; section < 7; ++section) {
+    for (std::size_t i = 0; i < req.sections[section].size(); ++i)
+      buffers[section][i] = narrow_token<std::uint8_t>(req.sections[section][i]);
+  }
+  std::vector<std::vector<unsigned char>> before(count);
+  for (std::size_t i = 0; i < count; ++i)
+    before[i].assign(buffers[i], buffers[i] + sizes[i]);
+  std::vector<unsigned char> before_shared;
+  if (req.has_overlap) before_shared.assign(shared_base, shared_base + shared_size);
+
+  q::ExpertMatrix matrices[] = {
+      {req.shape[0], req.shape[1], {buffers[1], sizes[1]}, {buffers[2], sizes[2]}},
+      {req.shape[2], req.shape[3], {buffers[3], sizes[3]}, {buffers[4], sizes[4]}},
+      {req.shape[4], req.shape[5], {buffers[5], sizes[5]}, {buffers[6], sizes[6]}}};
+  q::ExpertWorkspace work{{buffers[7], req.work_shape[0]}, {buffers[8], req.work_shape[1]},
+      {reinterpret_cast<std::uint16_t*>(buffers[9]), req.work_shape[2]},
+      {reinterpret_cast<std::uint16_t*>(buffers[10]), req.work_shape[3]},
+      {reinterpret_cast<std::uint16_t*>(buffers[11]), req.work_shape[4]},
+      {buffers[12], req.work_shape[5]}, {buffers[13], req.work_shape[6]}};
+  const std::span<const std::uint16_t> input(reinterpret_cast<const std::uint16_t*>(buffers[0]),
+                                             input_count);
+  const std::span<std::uint16_t> output(reinterpret_cast<std::uint16_t*>(buffers[14]), req.cap);
+  q::detail::SwigluTrace trace;
+  if (traced) {
+    const std::vector<std::size_t> shape = req.has_trace_shape ? req.trace_shape
+                                                               : std::vector<std::size_t>(5, req.shape[0]);
+    trace = {{reinterpret_cast<std::uint32_t*>(buffers[15]), shape[0]},
+             {reinterpret_cast<std::uint32_t*>(buffers[16]), shape[1]},
+             {reinterpret_cast<std::uint32_t*>(buffers[17]), shape[2]},
+             {reinterpret_cast<std::uint32_t*>(buffers[18]), shape[3]},
+             {reinterpret_cast<std::uint32_t*>(buffers[19]), shape[4]}};
+  }
+#if defined(__SANITIZE_ADDRESS__)
+  if (req.poison) for (std::size_t i = 0; i < 7; ++i) ASAN_POISON_MEMORY_REGION(buffers[i], sizes[i]);
+  if (req.poison_writes) for (std::size_t i = 7; i < count; ++i) ASAN_POISON_MEMORY_REGION(buffers[i], sizes[i]);
+#endif
+  const std::size_t used[] = {0, 0, 0, 0, 0, 0, 0, req.shape[1], req.shape[1] / 32,
+      buffer_bytes(req.shape[0], 2), buffer_bytes(req.shape[0], 2), buffer_bytes(req.shape[0], 2),
+      req.shape[0], req.shape[0] / 32, buffer_bytes(req.shape[2], 2),
+      buffer_bytes(req.shape[0], 4), buffer_bytes(req.shape[0], 4), buffer_bytes(req.shape[0], 4),
+      buffer_bytes(req.shape[0], 4), buffer_bytes(req.shape[0], 4)};
+  const auto shared_byte = [&](std::size_t index, std::size_t offset) {
+    if (!req.has_overlap || (index != req.act_first && index != req.act_second)) return false;
+    const std::size_t start = static_cast<std::size_t>(buffers[index] - shared_base);
+    return offset >= start && offset - start < std::min(used[index], sizes[index]);
+  };
+  const auto allowed_shared = [&](std::size_t offset, bool runtime) {
+    for (std::size_t index : {req.act_first, req.act_second}) {
+      if (index >= count || index < 7) continue;
+      if (runtime && (index == 12 || index == 13 || index == 14)) continue;
+      if (shared_byte(index, offset)) return true;
+    }
+    return false;
+  };
+  const int outcome = call_guarded([&] {
+    if (fault == "expert-early-reject") throw std::invalid_argument("injected early expert rejection");
+    if (traced) {
+      if (req.has_route) q::detail::trace_expert(input, matrices[0], matrices[1], matrices[2],
+                                                 req.route, work, output, trace);
+      else q::detail::trace_expert(input, matrices[0], matrices[1], matrices[2], work, output, trace);
+    } else if (req.has_route) {
+      q::expert(input, matrices[0], matrices[1], matrices[2], req.route, work, output);
+    } else {
+      q::expert(input, matrices[0], matrices[1], matrices[2], work, output);
+    }
+  });
+#if defined(__SANITIZE_ADDRESS__)
+  for (std::size_t i = 0; i < count; ++i) ASAN_UNPOISON_MEMORY_REGION(buffers[i], sizes[i]);
+  if (req.has_overlap) ASAN_UNPOISON_MEMORY_REGION(shared_base, shared_size);
+#endif
+  if (outcome != kOk) {
+    if (fault == "reject-input-write" && input_count) buffers[0][0] ^= 1;
+    if (fault == "shared-gap-write" && req.has_overlap) {
+      for (std::size_t i = 0; i < shared_size; ++i) {
+        if (!allowed_shared(i, req.runtime_failure)) { shared_base[i] ^= 1; break; }
+      }
+    }
+    bool changed = false;
+    if (req.runtime_failure) {
+      for (std::size_t i = 0; i < 7; ++i)
+        if (!req.has_overlap || (i != req.act_first && i != req.act_second))
+          changed |= buffer_changed(before[i].data(), buffers[i], sizes[i]);
+      if (!req.has_overlap || (req.act_first != 14 && req.act_second != 14))
+        changed |= buffer_changed(before[14].data(), buffers[14], sizes[14]);
+      for (std::size_t i = 7; i < count; ++i) {
+        if (i == 14 || (req.has_overlap && (i == req.act_first || i == req.act_second))) continue;
+        const std::size_t prefix = (i == 12 || i == 13) ? 0 : std::min(used[i], sizes[i]);
+        changed |= buffer_changed(before[i].data() + prefix, buffers[i] + prefix,
+                                  sizes[i] - prefix);
+      }
+      if (req.has_overlap) {
+        for (std::size_t i = 0; i < shared_size; ++i)
+          if (!allowed_shared(i, true) && shared_base[i] != before_shared[i]) changed = true;
+      }
+      const auto prefix_changed = [&](std::size_t index) {
+        const std::size_t prefix = std::min(used[index], sizes[index]);
+        return prefix != 0 && buffer_changed(before[index].data(), buffers[index], prefix);
+      };
+      for (std::size_t index : {7u, 8u, 9u, 10u, 11u}) {
+        if (!prefix_changed(index)) die("runtime expert rejection did not reach every bridge boundary");
+      }
+      if (traced) {
+        for (std::size_t index = 15; index < count; ++index)
+          if (!prefix_changed(index)) die("runtime expert rejection did not populate trace stages");
+      }
+      bool hidden_all_nan = true;
+      for (std::size_t i = 0; i < req.shape[0]; ++i) {
+        std::uint16_t value = 0;
+        std::memcpy(&value, buffers[11] + 2 * i, 2);
+        hidden_all_nan &= (value & 0x7FFFu) > 0x7F80u;
+      }
+      if (!hidden_all_nan || prefix_changed(12) || prefix_changed(13))
+        die("runtime expert rejection was not the expected hidden quantization boundary");
+    } else {
+      for (std::size_t i = 0; i < count; ++i)
+        if (!req.has_overlap || (i != req.act_first && i != req.act_second))
+          changed |= buffer_changed(before[i].data(), buffers[i], sizes[i]);
+      if (req.has_overlap)
+        changed |= buffer_changed(before_shared.data(), shared_base, shared_size);
+    }
+    return err_response(outcome, changed);
+  }
+  if (req.runtime_failure) die("runtime_failure request unexpectedly succeeded");
+  if (fault == "input-write" && input_count) buffers[0][0] ^= 1;
+  if (fault == "shared-gap-write" && req.has_overlap) {
+    for (std::size_t i = 0; i < shared_size; ++i) {
+      if (!allowed_shared(i, false)) { shared_base[i] ^= 1; break; }
+    }
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (req.has_overlap && (i == req.act_first || i == req.act_second)) continue;
+    if (i < 7 && buffer_changed(before[i].data(), buffers[i], sizes[i]))
+      die("expert input changed on success");
+    const std::size_t prefix = std::min(used[i], sizes[i]);
+    if (buffer_changed(before[i].data() + prefix, buffers[i] + prefix, sizes[i] - prefix))
+      die("expert bytes outside write ranges changed on success");
+  }
+  if (req.has_overlap) {
+    for (std::size_t i = 0; i < shared_size; ++i)
+      if (!allowed_shared(i, false) && shared_base[i] != before_shared[i])
+        die("expert bytes outside write ranges changed on success");
+  }
+  std::string response = "ok";
+  const auto append_buffer = [&](std::size_t index, std::size_t width) {
+    for (std::size_t offset = 0; offset < sizes[index]; offset += width) {
+      std::uint32_t value = 0;
+      std::memcpy(&value, buffers[index] + offset, width);
+      append_hex(response, value);
+    }
+  };
+  append_buffer(7, 1);
+  append_buffer(8, 1);
+  append_buffer(9, 2);
+  append_buffer(10, 2);
+  if (traced) for (std::size_t i = 15; i < 20; ++i) append_buffer(i, 4);
+  append_buffer(11, 2);
+  append_buffer(12, 1);
+  append_buffer(13, 1);
+  append_buffer(14, 2);
+  return response;
+}
+
 using DequantFn32 = void (*)(std::span<const std::uint8_t>, q::Shape,
                              std::span<const std::uint8_t>, q::Shape, std::span<std::uint32_t>);
 using DequantFn16 = void (*)(std::span<const std::uint8_t>, q::Shape,
@@ -1357,6 +1710,12 @@ std::string dispatch(const Request& req, std::string_view fault) {
   using u16 = std::uint16_t;
   using u32 = std::uint32_t;
   using i8 = std::int8_t;
+  if (req.op == "expert_bf16" || req.op == "expert_trace") return run_expert(req, fault);
+  if (req.op == "expert_counts") return run_expert_counts(req, false);
+  if (req.op == "expert_counts_trace") return run_expert_counts(req, true);
+  if (req.op == "expert_storage") return run_expert_storage(req);
+  if (req.has_input_count || req.has_work_shape || req.runtime_failure)
+    die("expert fields on another request family");
   if (req.op == "expert_linear_fp32") return run_linear<u32>(req, fault);
   if (req.op == "expert_linear_bf16") return run_linear<u16>(req, fault);
   if (req.op == "swiglu" || req.op == "swiglu_trace") return run_swiglu(req, fault);
@@ -1457,7 +1816,8 @@ int main(int argc, char** argv) {
   }
   if (fault != "none" && fault != "crash" && fault != "exit" && fault != "garbage" &&
       fault != "mismatch" && fault != "drop" && fault != "input-write" &&
-      fault != "reject-input-write" && fault != "shared-gap-write") {
+      fault != "reject-input-write" && fault != "shared-gap-write" &&
+      fault != "expert-early-reject") {
     die("unknown --fault value '" + fault + "'");
   }
   if (status != "clear" && status != "set") {

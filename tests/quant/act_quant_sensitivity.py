@@ -116,7 +116,7 @@ def build(directory, cxx):
                  str(directory / 'quant_exec.cpp'),
                  *[str(directory / 'src/quant' / name) for name in
                    ('codec.cpp', 'dequant.cpp', 'compute.cpp', 'act_quant.cpp', 'linear.cpp',
-                    'swiglu.cpp')], '-o', str(executable)])
+                    'swiglu.cpp', 'expert.cpp')], '-o', str(executable)])
     return executable
 
 
