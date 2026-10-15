@@ -23,6 +23,7 @@
 //             [overlap=<buffer>,<buffer> in_offset=<bytes> out_offset=<bytes>]
 //             [trace_alias=<buffer>,<buffer>] [trace_shape=<five lengths>] [poison]
 //             : <gate BF16 bits> ... ; <up BF16 bits> ...
+//   P0021 counts: swiglu_counts[_trace] cap=<element count> : (empty payload)
 //   Linear buffers are input,w,sb,a,sa,out. Defaults are exact workspace sizes;
 //   workspace responses are uint32 words: full out, full a, full sa capacities.
 //   poison makes inputs unreadable; poison_writes makes destinations inaccessible.
@@ -1128,6 +1129,24 @@ std::string run_swiglu(const Request& req, std::string_view fault) {
   return response;
 }
 
+// Private scalar probe of the SwiGLU count checks shared by every production
+// entry; huge element counts stay testable because no span is constructed.
+std::string run_swiglu_counts(const Request& req, bool traced) {
+  if (!req.has_cap || req.has_shape || req.has_scale_shape || req.has_scale_cap ||
+      req.has_a_cap || req.workspace || req.alias || req.scale_alias || req.poison ||
+      req.poison_writes || req.has_overlap || req.has_trace_alias || req.trace_object_alias ||
+      req.has_route || req.has_trace_shape || req.has_in_offset || req.has_out_offset) {
+    die("swiglu_counts takes only cap=");
+  }
+  require_sections(req, 1, "swiglu_counts");
+  if (!req.sections[0].empty()) die("swiglu_counts takes no payload tokens");
+  const int outcome = call_guarded([&] { q::detail::check_swiglu_counts(req.cap, traced); });
+  if (outcome != kOk) {
+    return err_response(outcome, false);
+  }
+  return "ok";
+}
+
 // P0017 composition exists only here: production activation buffers are passed
 // directly to the production grouped dot, without a driver round-trip or public API.
 template <class Out>
@@ -1341,6 +1360,8 @@ std::string dispatch(const Request& req, std::string_view fault) {
   if (req.op == "expert_linear_fp32") return run_linear<u32>(req, fault);
   if (req.op == "expert_linear_bf16") return run_linear<u16>(req, fault);
   if (req.op == "swiglu" || req.op == "swiglu_trace") return run_swiglu(req, fault);
+  if (req.op == "swiglu_counts") return run_swiglu_counts(req, false);
+  if (req.op == "swiglu_counts_trace") return run_swiglu_counts(req, true);
   if (req.has_route) die("route field on another request family");
   if (req.op == "act_quant" || req.op == "act_quant_trace") return run_act_quant(req, fault);
   if (req.op == "act_quant_dot_fp32") return run_act_combination<u32>(req);

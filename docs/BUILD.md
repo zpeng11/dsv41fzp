@@ -110,7 +110,7 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.linear.harness` | 线性协议、执行器故障、布局及结果错误的检出与失败传播 |
 | `quant.linear.consumer` | 仅使用公共头和 df_quant 的独立 C++ 调用，手算输出、舍入和矩阵级拒绝；安全构造尺寸溢出 |
 | `quant.swiglu.parity` | 生产 SwiGLU 普通/私有 trace 逐阶段对照 `ref/expert.py`；默认环境穷举全部 BF16 gate 编码，定向集合覆盖八模式 MXCSR 与状态位预置，特殊值乘法另对照独立期望 |
-| `quant.swiglu.contract` | 等长、容量、有限 route weight、实际写前缀别名、trace 形状/别名、空输入及失败原子性；输入可含非有限 BF16 并按 EXPERT 传播 |
+| `quant.swiglu.contract` | 等长、容量、有限 route weight、实际写前缀别名、trace 形状/别名、空输入及失败原子性；输入可含非有限 BF16 并按 EXPERT 传播；私有标量探针以 64 位边界计数验证输入/trace 字节计数溢出拒绝 |
 | `quant.swiglu.harness` | SwiGLU 协议、响应宽度、执行器故障、输入快照、共享间隙及 ASan 加毒有效性均传播到驱动失败 |
 | `quant.swiglu.consumer` | 仅使用公共头和 df_quant 的独立 C++ 调用，手写普通/加权输出、空输入、非有限传播、尾部与拒绝原子性 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
@@ -173,7 +173,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/linear_sensitivity.py
 
 `quant.compute`、`quant.act_quant` 与 `quant.expert` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。生产 `quant.swiglu.*` 位于 quant 子树，进入三种 CPU preset；全域 gate 穷举仅在 parity 的默认 MXCSR 子步骤执行一次。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
 
-`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}`、`quant.linear.{parity,contract,harness,consumer}`、`quant.swiglu.{parity,contract,harness,consumer}` 与 `quant.compile_flags`（验证 df_quant、df_quant_exec、df_linear_consumer 与 df_swiglu_consumer 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。经协议调用的 quant 套件通过 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
+`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}`、`quant.linear.{parity,contract,harness,consumer}`、`quant.swiglu.{parity,contract,harness,consumer}` 与 `quant.compile_flags`（验证 df_quant、df_quant_exec、df_linear_consumer 与 df_swiglu_consumer 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。经协议调用的 quant 套件通过 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法、SwiGLU 计数与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
 SwiGLU 的同类型别名由公共入口或同核心 trace 入口验证；无法合法同时构造 BF16/FP32 数组的混型交叠，仅调用生产共用的私有 byte-range 存储校验。该探针要求其他元数据合法，否则按协议错误退出，不把非法 typed span 或响应解析失败作为拒绝证据。[代码]
 

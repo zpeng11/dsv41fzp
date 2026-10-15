@@ -93,6 +93,10 @@ void trace_swiglu(std::span<const std::uint16_t> gate, std::span<const std::uint
 void check_swiglu_storage(std::span<const std::byte> gate, std::span<const std::byte> up,
                           std::span<const std::span<std::byte>> writes);
 
+// Count checks shared by every SwiGLU entry: input bytes and, when traced, stage
+// bytes must not overflow size_t. Scalar arguments keep huge counts testable.
+void check_swiglu_counts(std::size_t count, bool traced);
+
 // Only the actually consumed prefixes participate; empty ranges never overlap.
 template <class In, class Out>
 void require_disjoint(std::span<In> in, std::size_t in_count, std::span<Out> out, std::size_t out_count) {

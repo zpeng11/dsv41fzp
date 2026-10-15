@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ref import expert as impl
-from test_codec_parity import Case, HarnessError, parse_response, run_executor
+from test_codec_parity import Case, HarnessError, check, parse_response, run_executor
 from test_dequant_parity import ENVIRONMENTS, MXCSR_STATUS, mxcsr_probe
 from test_expert import expected_mul, expected_silu
 
@@ -295,6 +295,23 @@ class Parity(unittest.TestCase):
 
 
 class Contract(unittest.TestCase):
+    def test_count_overflow_probe(self):
+        if SELECT and not any(token in 'counts' for token in SELECT):
+            return
+        maximum = (1 << 64) - 1
+        cases = []
+        for op, traced in (('swiglu_counts', False), ('swiglu_counts_trace', True)):
+            half, quarter = maximum // 2, maximum // 4
+            for count, rejected in ((half, traced), (half + 1, True),
+                                    (quarter, False), (quarter + 1, traced)):
+                case = Case(f'counts.{op}.{count}', op, (), [], 0, 4,
+                            ('err', 'invalid_argument') if rejected else ('ok', []))
+                case.line = lambda op=op, count=count: f'{op} cap={count} :'
+                cases.append(case)
+        responses = run_executor(EXE, cases)
+        self.assertEqual([message for case, response in zip(cases, responses)
+                          if (message := check(case, response))], [])
+
     def test_metadata_storage_and_specials(self):
         cases = selected(list(contract_cases()))
         self.assertTrue(cases, 'empty selection is not acceptance')
@@ -444,7 +461,8 @@ def main():
                      [f'exhaustive.{start:04x}.trace' for start in range(0, 1 << 16, 4096)] +
                      ['independent-boundaries.trace', 'multiply-specials'])
         elif args.suite == 'contract':
-            names = [case.name for case in contract_cases()]
+            names = [case.name for case in contract_cases()] + [
+                'counts.swiglu_counts', 'counts.swiglu_counts_trace']
         else:
             names = [case.name for case in Harness().sample()]
         if not any(any(selector in name for selector in SELECT) for name in names):

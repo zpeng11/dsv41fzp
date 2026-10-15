@@ -37,9 +37,7 @@ void check_metadata(std::span<const std::uint16_t> gate, std::span<const std::ui
   if (weighted && (route_weight_bits & kFp32Magnitude) >= kFp32Inf) {
     throw std::invalid_argument("route weight must be finite FP32");
   }
-  if (count > std::numeric_limits<std::size_t>::max() / sizeof(std::uint16_t)) {
-    throw std::invalid_argument("SwiGLU byte count overflows size_t");
-  }
+  detail::check_swiglu_counts(count, trace != nullptr);
   if (out.size() < count) {
     throw std::invalid_argument("output capacity is smaller than the result");
   }
@@ -48,9 +46,6 @@ void check_metadata(std::span<const std::uint16_t> gate, std::span<const std::ui
         trace->silu_bits.size() != count || trace->gated_bits.size() != count ||
         trace->weighted_bits.size() != count) {
       throw std::invalid_argument("trace spans do not match the input length");
-    }
-    if (count > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t)) {
-      throw std::invalid_argument("SwiGLU trace byte count overflows size_t");
     }
   }
 
@@ -110,6 +105,15 @@ void check_swiglu_storage(std::span<const std::byte> gate, std::span<const std::
     for (std::size_t j = 0; j < i; ++j) {
       require_disjoint(writes[j], writes[j].size(), writes[i], writes[i].size());
     }
+  }
+}
+
+void check_swiglu_counts(std::size_t count, bool traced) {
+  if (count > std::numeric_limits<std::size_t>::max() / sizeof(std::uint16_t)) {
+    throw std::invalid_argument("SwiGLU byte count overflows size_t");
+  }
+  if (traced && count > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t)) {
+    throw std::invalid_argument("SwiGLU trace byte count overflows size_t");
   }
 }
 
