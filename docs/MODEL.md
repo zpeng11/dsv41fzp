@@ -183,6 +183,8 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡][ckpt]；分解：专家 FP4 296
 | --- | --- |
 | K-R1 | **精确算式**：gate 全 fp32 → linear → sqrt(softplus) → `(scores+bias).topk(6)`（**bias 只选不缩放**；图像 span 用 bias_vl）→ 权重取未加 bias 的分 → 被选 6 个内归一化（防零 1e-20）→ ×1.5；专家内 swiglu_limit=10 钳位（up ±10 / gate ≤10，为低精度激活保范围）。sqrt(softplus) 与 topk+gather 的融合实现是 kernel 点 |
 
+[代码] `inference/config.json:14–19` 固定主干专家数、激活数、打分函数及路由缩放；`model.py:67,811` 的 gate 温度默认 1.0，发布配置未覆盖；`model.py:824–825` 启用被选专家内归一化。`F.softplus` 默认 beta=1、threshold=20，严格在 `input*beta>threshold` 时返回线性值（[PyTorch 算子说明](https://docs.pytorch.org/docs/2.13/generated/torch.nn.functional.softplus.html)），否则为 `ln(1+exp(beta*x))/beta`；说明不规定 FP32 算法或设备逐位行为。gate 权重为 BF16、两种选择 bias 为 FP32（[ckpt]，P0016 的头部清单与 `tools/ckpt_inventory.py`）。CPU 分阶段舍入、确定性选择和失败契约见 [ROUTER](ROUTER.md)，选择理由见 [D0018](../plan/decisions/d0018-router-reference.md)。
+
 ### 3.6 Engram 检索（`src/attn/` 子模块）
 
 | 编号 | 内容 |
@@ -245,6 +247,7 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡][ckpt]；分解：专家 FP4 296
 | `df_quant` SwiGLU bridge | [EXPERT §5](EXPERT.md#5-生产-swiglu-bridge)；上一级为 `ref/expert.py::swiglu` 及独立区间边界期望 | 同契约完整专家生产实现的非线性桥 | W1/W3 双投影、共享输入量化、第二次激活量化、W2、完整专家统一失败原子性、路由权重生成、多专家/共享专家、SIMD/CUDA 与融合 |
 | `df_quant` 专家线性层 | [COMPUTE §7](COMPUTE.md#7-单-token-专家线性层)；上一级为 Python 激活量化与逐行点积参照组合 | 同契约单 token 完整线性快路径 | batch、非线性与专家串接、路由和共享专家、K-E1/K-E2；不能由组件已验收替代矩阵级验收 |
 | `df_quant` 完整 FP4 专家 | [EXPERT §6](EXPERT.md#6-生产完整专家)；上一级为 `ref/expert.py::expert/trace_expert`，证据归 [P0022](../plan/p0022-expert-scalar.md) | 同契约单 token 单专家快路径 | router/权重生成、多专家聚合、共享 FP8 专家、batch、生产加载器、真实模型激活和质量 |
+| `ref/router.py` | [ROUTER](ROUTER.md)；官方 Gate 阶段与 D0018 的 CPU 选择，证据归 [P0023](../plan/p0023-router-oracle.md) | 同契约生产单 token 主干 router；合成接口测试将编号及 FP32 权重交给既有专家 | 生产 router、真实 Gate 权重/模型激活、共享 FP8 专家、多专家聚合及完整 MoE、DSpark 配置、batch；确定性 tie 与 CPU 归约不证明官方 GPU 等价 |
 | `tools/ckpt_inventory.py` | 本页 §2.1～§2.2 的 [ckpt] 事实；运行方法见 [BUILD §7](BUILD.md#7-测试清单) | 未来 `src/artifact` 读取器的张量清单 | 码点统计以外的数值语义、pack 格式与转换、读取性能、其他快照 |
 | `tools/ckpt_expert.py` | §2.1 路由专家行布局与既有 ACTQUANT/COMPUTE 契约；读取和运行约束见 [BUILD §7](BUILD.md#7-测试清单) | 真实权重选定行的集成验证入口，不新增数值 oracle；读取由独立合成字节验收，计算对照既有 Python 参照组合 | 未选权重载荷、真实模型激活、完整线性层/专家 MLP、生产 artifact 读取器；人工输入的局部 parity 不证明模型质量 |
 | `tools/ckpt_linear.py` | §2.1 路由专家布局与 [COMPUTE §7](COMPUTE.md#7-单-token-专家线性层)；读取和运行约束见 [BUILD §7](BUILD.md#7-测试清单) | 固定专家完整 w1 的集成验证入口，不新增数值 oracle；独立验收读取字节，全输出对照 Python 参照组合 | 未选矩阵、真实模型激活、完整专家 MLP、生产 artifact 读取器；人工输入 parity 不证明模型质量 |

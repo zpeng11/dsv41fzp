@@ -5,7 +5,7 @@ status: active
 created: 2026-10-15
 updated: 2026-10-15
 knowledge: pending
-docs: [docs/MODEL.md, docs/BUILD.md]
+docs: [docs/ROUTER.md, docs/MODEL.md, docs/BUILD.md]
 bench: []
 decisions: [D0011, D0015, D0018]
 followups: []
@@ -34,9 +34,9 @@ followups: []
 
 - 前置：P0022 的完整生产专家及 [P0020](p0020-expert-oracle.md) 的专家参照。二者消费外部权重，不负责生成权重或选择专家，边界见 [MODEL §4](../docs/MODEL.md#4-精确性链条)。既有参照不因新实现方便而改写。
 - 官方来源：只读镜像 `third_party/reference/inference/model.py:792–827` 的 Gate；`841–851` 的专家内权重位置；`889–904` 的 MoE 连接关系。按主干 MoE 配置验证，文本/图像 bias 分支仅表示 token 属性，不引入视觉计算。DSpark 特殊配置与 softmax/sigmoid 等其他打分模式不在本项验收范围。
-- CPU 数值取舍须新建 D，不预先绑定宿主 Torch/libm 或替官方 GPU 确定归约与平局行为。[D0015](decisions/d0015-expert-oracle.md) 仅作建立独立非线性参照的先例，不直接决定本项 softplus/sqrt 契约。
+- CPU 数值取舍见 D0018，不绑定宿主 Torch/libm 或替官方 GPU 确定归约与平局行为。[D0015](decisions/d0015-expert-oracle.md) 仅作建立独立非线性参照的先例，不直接决定本项 softplus/sqrt 契约。
 - 范围外：生产 C++ router、真实 checkpoint Gate 闭环、共享 FP8 专家、多专家聚合/分布式归约、完整 MoE、batch、调度、加载器/pack/缓存、SIMD/CUDA/融合、性能、官方 GPU parity、模型质量、attention/KV/mHC/Engram、CI/bench 工作流及 P0005 硬件资质。
-- 预期工件为 `ref/router.py` 与 core 域测试；具体 API 和测试入口随开工方案审议。拟新建 `docs/ROUTER.md` 作为唯一契约正文，未创建前不填入 front matter；MODEL 只补覆盖边界，BUILD 只补操作入口，本项只留意图、过程和证据。
+- 实施工件为 `ref/router.py` 与 core 域测试；API 与数值边界归 [ROUTER](../docs/ROUTER.md)，选择理由留 D0018，MODEL 只补模型依据与覆盖边界，BUILD 只补操作入口，本项只留意图、过程和证据。
 
 ### 最终证据
 
@@ -49,7 +49,8 @@ followups: []
 
 ### 提交
 
-尚未提交。
+- `540a6c6`：接受 D0018，登记 P0023 active 并同步 STATUS。
+- 实现、知识归档与最终增量证据待提交后回填。
 
 ## 收尾
 
