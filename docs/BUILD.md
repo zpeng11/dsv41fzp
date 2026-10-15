@@ -182,7 +182,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_expert_parity.py --exe build/
 PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/expert_sensitivity.py
 ```
 
-离线工具可重复传入 `--exe`，同一次载荷读取与 oracle 阶段结果供多个执行器分别验证，报告逐执行器记录身份与比较，不建立持久期望缓存。完整专家驱动的 `--suite` 为 `parity`、`contract` 或 `harness`；敏感性在临时副本中变更组合接线，不改已验收数值核心或工作树。私有观测保留真实生产阶段，不由 Python 填入中间结果。契约见 [EXPERT §6](EXPERT.md#6-生产完整专家)，覆盖边界见 [MODEL §4](MODEL.md#4-精确性链条)，验收证据见 [P0022](../plan/p0022-expert-scalar.md)。[代码]
+离线工具可重复传入 `--exe`，同一次载荷读取与 oracle 阶段结果供多个执行器分别验证，报告逐执行器记录身份与比较，不建立持久期望缓存。完整专家驱动的 `--suite` 为 `parity`、`contract` 或 `harness`；敏感性在临时副本中变更组合接线，不改工作树。契约见 [EXPERT §6](EXPERT.md#6-生产完整专家)，覆盖边界见 [MODEL §4](MODEL.md#4-精确性链条)，验收证据见 [P0022](../plan/p0022-expert-scalar.md)。[代码]
 
 `tools.ckpt_expert`、`tools.ckpt_linear` 与 `tools.ckpt_expert_mlp` 只在 CPU Debug/Release 注册，使用临时合成文件与当前构建的执行器；不扩大 quant 专用 sanitizer 范围。源码目录外运行上述入口时，脚本、快照、执行器和报告目标均使用绝对路径。[代码]
 
@@ -190,7 +190,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/expert_sensitivity.py
 
 `cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}`、`quant.linear.{parity,contract,harness,consumer}`、`quant.swiglu.{parity,contract,harness,consumer}`、`quant.expert.{parity,contract,harness,consumer}` 与 `quant.compile_flags`（验证 df_quant、df_quant_exec 及 linear/swiglu/expert 三个 consumer 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。经协议调用的 quant 套件通过 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法、SwiGLU 计数与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
-SwiGLU 与完整专家的同类型别名由公共入口或同核心 trace 入口验证；无法合法同时构造 BF16/FP32 数组的混型交叠，仅调用生产共用的私有 byte-range 存储校验。该探针要求其他元数据合法，否则按协议错误退出，不把非法 typed span 或响应解析失败作为拒绝证据。专家的共享 allocation 按有效写区间并集核对；运行中拒绝探针还核对实际 hidden 阶段与预填状态，并以提前拒绝和共享间隙注错作负控，不能仅凭异常类型认定触达第二次量化。[代码]
+SwiGLU 与完整专家的同类型别名由公共入口或同核心 trace 入口验证；无法合法同时构造 BF16/FP32 数组的混型交叠，仅调用生产共用的私有 byte-range 存储校验。该探针要求其他元数据合法，否则按协议错误退出，不把非法 typed span 或响应解析失败作为拒绝证据；完整专家的阶段拒绝与存储负控证据见 P0022。[代码]
 
 **八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。`quant.dequant.{parity,multiply}`、`quant.compute.parity`、`quant.act_quant`、生产 `quant.act_quant.{parity,contract,combination}`、`quant.linear.{parity,contract}`、`quant.swiglu.{parity,contract}` 与 `quant.expert.{parity,contract}` 的定向集合使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
 
