@@ -91,6 +91,7 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.expert` | `tests/quant/test_expert.py`：独立 SiLU 区间与三矩阵逐阶段期望、错误链反例及环境检查；契约见 [EXPERT](EXPERT.md) |
 | `core.router` | `tests/core/test_router.py`：投影、softplus/sqrt、选择及权重的独立阶段期望、定向错误链、输入和环境；契约见 [ROUTER](ROUTER.md) |
 | `core.router.expert` | `tests/core/test_router_expert.py`：合成路由编号/权重映射至既有专家普通与 trace 入口，不依赖 checkpoint |
+| `core.moe` | `tests/core/test_moe.py`：routed 分支的独立聚合、实际路由/专家组合、输入与环境及错误链；契约见 [MOE](MOE.md) |
 | `core.router.parity` | `tests/core/test_router_parity.py`：生产普通/观测逐阶段对照路由参照与独立边界期望，含除法/sqrt、认证区间与 MXCSR 控制/状态 |
 | `core.router.contract` / `core.router.harness` | 同驱动检查预检、容量、别名、失败原子性与认证耗尽，以及执行器/响应故障和 ASan 加毒有效性 |
 | `core.router.consumer` / `core.compile_flags` | 公共头独立 C++ 调用、手写结果及成功路径无动态数值存储；按当前 scope 核对 target 编译选项 |
@@ -148,6 +149,8 @@ ctest --test-dir <repo>/build/cpu-debug -R '^core\.router(\.expert)?$' --output-
 ```
 
 Release 换对应目录。上述参照接口测试复用 `df_quant_exec`，只执行所选专家，不聚合输出；P0024 的生产路由使用独立 `df_core_exec`，不改变原命令语义。[代码]
+
+P0025 routed 分支参照仅依赖标准库，不需要 C++ 执行器、权重或网络。从任意目录执行 `PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/core/test_moe.py`；配置 Debug/Release 后可用 `ctest --test-dir <repo>/build/cpu-debug -R '^core\.moe$' --output-on-failure --no-tests=error`（Release 换对应目录），无需 build。只采集新增测试，导入旧模块仅复用期望与构造，不重跑旧验收；非 ENV-A、异常、错误或 skip 均失败，不扩大两种 sanitizer scope。数值及环境边界只见 [MOE](MOE.md)。[代码]
 
 生产路由增量验证使用下列命令；所有路径从源码目录外运行时换绝对路径。`cpu-asan-core` 同 §3 的 sanitizer 环境，但 scope 为 core，不扩大原 `cpu-asan` 的 quant-only 注册。[D][代码]
 

@@ -11,6 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
+| [P0025 — 单 token 主干 routed 分支 CPU 参照与多专家聚合验证](p0025-routed-branch-oracle.md) | active | 人工审议通过、D0020 accepted；待已提交干净检出复现及范围审计后结项 |
 
 ## 已验收入口
 
