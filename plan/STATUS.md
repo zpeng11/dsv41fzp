@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-**开发阶段初期：已有 CPU 格式、反量化、专家分组点积与动态激活量化参照及生产 scalar，单 token 线性层、SwiGLU 桥与完整 FP4 专家生产 scalar，以及官方 checkpoint 清点、选定行、完整 w1 和固定专家三矩阵验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
+**开发阶段初期：已有 CPU 格式、反量化、专家分组点积与动态激活量化参照及生产 scalar，单 token 线性层、SwiGLU 桥与完整 FP4 专家生产 scalar、主干 MoE 路由 CPU 参照与合成专家接口验证，以及官方 checkpoint 清点、选定行、完整 w1 和固定专家三矩阵验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
 
 ## 当前工作项
 
@@ -22,6 +22,7 @@
 | `df_quant` 专家分组点积 | [COMPUTE §6](../docs/COMPUTE.md#6-生产-c-scalarsrcquant) | [P0013](p0013-expert-grouped-dot-scalar.md) |
 | `ref/act_quant.py` | [ACTQUANT](../docs/ACTQUANT.md) | [P0014](p0014-act-quant-oracle.md) |
 | `ref/expert.py` | [EXPERT](../docs/EXPERT.md) | [P0020](p0020-expert-oracle.md) |
+| `ref/router.py` 与合成专家接口 | [ROUTER](../docs/ROUTER.md)；[MODEL §4](../docs/MODEL.md#4-精确性链条) 的主干路由与接口边界 | [P0023](p0023-router-oracle.md) |
 | `df_quant` 单行动态激活量化 | [ACTQUANT §7](../docs/ACTQUANT.md#7-生产-c-scalarsrcquant) | [P0017](p0017-act-quant-scalar.md) |
 | `tools/ckpt_inventory.py` | [MODEL §2](../docs/MODEL.md#2-结构与格式) 的 [ckpt] 事实 | [P0016](p0016-checkpoint-inventory.md) |
 | `tools/ckpt_expert.py` | [MODEL §4](../docs/MODEL.md#4-精确性链条) 的真实权重选定行验证边界；[BUILD §7](../docs/BUILD.md#7-测试清单) 的操作约束 | [P0018](p0018-checkpoint-expert-consumption.md) |

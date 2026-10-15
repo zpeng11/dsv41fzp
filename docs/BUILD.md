@@ -2,7 +2,7 @@
 
 本页归档 C++ 构建契约、操作命令与支持环境。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），构建基线证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)；数值入口的状态与验收证据由 [STATUS](../plan/STATUS.md) 路由，规格见各契约页。
 
-**来源标记**：**[D]** D0005/D0007/D0013/D0016/D0017 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
+**来源标记**：**[D]** D0005/D0007/D0013/D0016/D0017/D0018 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
 
 ## 1. 支持环境
 
@@ -88,6 +88,8 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `bb.compile_flags` | 从 `compile_commands.json` 验证严格选项只出现在应有的 target（含 `df_quant`，不含其执行器），全部 target 无 fast-math、`-march` 与 `-fsanitize` |
 | `quant.formats` | `tests/quant/test_formats.py` |
 | `quant.expert` | `tests/quant/test_expert.py`：独立 SiLU 区间与三矩阵逐阶段期望、错误链反例及环境检查；契约见 [EXPERT](EXPERT.md) |
+| `core.router` | `tests/core/test_router.py`：投影、softplus/sqrt、选择及权重的独立阶段期望、定向错误链、输入和环境；契约见 [ROUTER](ROUTER.md) |
+| `core.router.expert` | `tests/core/test_router_expert.py`：合成路由编号/权重映射至既有专家普通与 trace 入口，不依赖 checkpoint |
 | `quant.compute` | `tests/quant/test_compute.py`：专家 FP8×packed FP4 单输出计算参照的独立逐阶段期望、输入契约、临时副本敏感性与失败传播 |
 | `quant.act_quant` | `tests/quant/test_act_quant.py`：BF16 动态激活量化参照的独立逐阶段期望、有限码点穷举、布局与计算组合、临时副本敏感性与失败传播 |
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
@@ -131,6 +133,16 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_act_quant.py
 ```
 
 单专家参照可从任意目录用 `PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/quant/test_expert.py` 独立运行，或 configure 后执行 `ctest --test-dir <repo>/build/cpu-debug -R '^quant\.expert$' --output-on-failure --no-tests=error`（Release 换对应目录），无需 C++ 构建、权重或网络。仅收集该文件测试，导入既有测试模块只复用独立期望函数。环境探针限 ENV-A 的 glibc x86_64，其他平台会 skip，不能据此宣称完整验收；异常屏蔽及 sticky 边界见 [EXPERT §3](EXPERT.md#3-特殊值失败与环境)。[代码][实测]
+
+路由参照与合成专家接口测试仅注册在 Debug/Release，不扩大 quant-only ASan 范围。从任意目录使用下列绝对路径命令；第一条只依赖标准库，第二条必须提供已构建的执行器，缺失或执行故障失败而不 skip。两者仅收集本文件测试，不重跑所导入模块的旧验收；环境探针要求 ENV-A，非支持环境失败。数值及 sticky 边界见 [ROUTER §3](ROUTER.md#3-拒绝与环境)。[代码]
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/core/test_router.py
+PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/core/test_router_expert.py --exe <repo>/build/cpu-debug/tests/quant/df_quant_exec
+ctest --test-dir <repo>/build/cpu-debug -R '^core\.router(\.expert)?$' --output-on-failure --no-tests=error
+```
+
+Release 换对应目录。`df_quant_exec` 的构建仍按 §3，不新增路由 C++ target；接口测试只执行所选专家，不聚合输出。[代码]
 
 生产量化套件由上述三种 CPU preset 的 CTest 运行，也可单独调用驱动；各脚本的 `--suite` 见测试清单。临时生产变体敏感性单独运行，不进入每次 CTest，证据见对应 P。以下命令不需要权重或 GPU；源码目录外运行时将脚本与执行器路径换成绝对路径。[代码]
 

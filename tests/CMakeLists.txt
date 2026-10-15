@@ -22,6 +22,9 @@ df_add_python_test(quant.formats "${PROJECT_SOURCE_DIR}/tests/quant/test_formats
 df_add_python_test(quant.compute "${PROJECT_SOURCE_DIR}/tests/quant/test_compute.py")
 df_add_python_test(quant.act_quant "${PROJECT_SOURCE_DIR}/tests/quant/test_act_quant.py")
 df_add_python_test(quant.expert "${PROJECT_SOURCE_DIR}/tests/quant/test_expert.py")
+df_add_python_test(core.router "${PROJECT_SOURCE_DIR}/tests/core/test_router.py")
+df_add_python_test(core.router.expert "${PROJECT_SOURCE_DIR}/tests/core/test_router_expert.py"
+  --exe $<TARGET_FILE:df_quant_exec>)
 df_add_python_test(tools.check_repo "${PROJECT_SOURCE_DIR}/tests/tools/test_check_repo.py")
 df_add_python_test(tools.ckpt_inventory "${PROJECT_SOURCE_DIR}/tests/tools/test_ckpt_inventory.py")
 df_add_python_test(tools.ckpt_expert "${PROJECT_SOURCE_DIR}/tests/tools/test_ckpt_expert.py"
