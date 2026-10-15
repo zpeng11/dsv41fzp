@@ -2,7 +2,7 @@
 
 本页归档 C++ 构建契约、操作命令与支持环境。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），构建基线证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)；数值入口的状态与验收证据由 [STATUS](../plan/STATUS.md) 路由，规格见各契约页。
 
-**来源标记**：**[D]** D0005/D0007/D0013/D0016/D0017/D0018 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
+**来源标记**：**[D]** D0005/D0007/D0013/D0016/D0017/D0018/D0019 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
 
 ## 1. 支持环境
 
@@ -54,10 +54,11 @@ Release 将三处 `cpu-debug` 换为 `cpu-release`。从其他目录运行测试
 | `df_cxx_baseline` | INTERFACE | C++20（`-std=c++20`，无 GNU 扩展），`-Wall -Wextra -Wpedantic`；不开 `-Werror`，不禁用 exceptions/RTTI |
 | `df_strict_fp` | INTERFACE | `-fno-fast-math -ffp-contract=off`；Debug 与 Release 均生效，数值 target 显式链接 |
 | `df_use_version_info(<target>)` | 函数 | 使 target 依赖版本刷新步骤并可包含 `df/version_info.h`；该头只应被单个 TU 包含 |
-| `df_sanitize` | INTERFACE | `DF_SANITIZE=ON` 时带 `-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer`（编译与链接），否则为空；只挂到 quant 生产库与执行器 |
+| `df_sanitize` | INTERFACE | `DF_SANITIZE=ON` 时带 `-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer`（编译与链接），否则为空；挂到 quant/core 生产库、对应执行器与公共消费者 |
 | `df_quant` | STATIC | 生产 quant 库（`src/quant`），公共头根为 `include/`，向消费者只传播 C++20；私有链接 `df_cxx_baseline`、`df_strict_fp`、`df_sanitize` |
+| `df_core` | STATIC | 主干 router scalar（`src/core`），公共头根为 `include/`，向消费者传播 C++20；私有链接 `df_quant` 与上述 baseline/strict/sanitize；quant-only scope 不构建 |
 
-缓存变量 `DF_TEST_SCOPE` 取 `all`（默认）或 `quant`，其他值在 configure 时 FATAL_ERROR。[代码]
+缓存变量 `DF_TEST_SCOPE` 取 `all`（默认）、`quant` 或 `core`，其他值在 configure 时 FATAL_ERROR。core scope 只注册生产 router 新测试与编译选项检查，不注册旧 oracle、quant 测试或专家组合测试；依赖的 `df_quant` 仍按相同选项构建。[代码]
 
 ## 5. 数值前提
 
@@ -90,6 +91,10 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.expert` | `tests/quant/test_expert.py`：独立 SiLU 区间与三矩阵逐阶段期望、错误链反例及环境检查；契约见 [EXPERT](EXPERT.md) |
 | `core.router` | `tests/core/test_router.py`：投影、softplus/sqrt、选择及权重的独立阶段期望、定向错误链、输入和环境；契约见 [ROUTER](ROUTER.md) |
 | `core.router.expert` | `tests/core/test_router_expert.py`：合成路由编号/权重映射至既有专家普通与 trace 入口，不依赖 checkpoint |
+| `core.router.parity` | `tests/core/test_router_parity.py`：生产普通/观测逐阶段对照路由参照与独立边界期望，含除法/sqrt、认证区间与 MXCSR 控制/状态 |
+| `core.router.contract` / `core.router.harness` | 同驱动检查预检、容量、别名、失败原子性与认证耗尽，以及执行器/响应故障和 ASan 加毒有效性 |
+| `core.router.consumer` / `core.compile_flags` | 公共头独立 C++ 调用、手写结果及成功路径无动态数值存储；按当前 scope 核对 target 编译选项 |
+| `core.router.combination` | 生产路由实际编号/权重进入既有专家执行器，核对专家普通/观测结果及错接线数值反例；不聚合 |
 | `quant.compute` | `tests/quant/test_compute.py`：专家 FP8×packed FP4 单输出计算参照的独立逐阶段期望、输入契约、临时副本敏感性与失败传播 |
 | `quant.act_quant` | `tests/quant/test_act_quant.py`：BF16 动态激活量化参照的独立逐阶段期望、有限码点穷举、布局与计算组合、临时副本敏感性与失败传播 |
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
@@ -142,7 +147,21 @@ PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/core/test_router_expert.py --exe 
 ctest --test-dir <repo>/build/cpu-debug -R '^core\.router(\.expert)?$' --output-on-failure --no-tests=error
 ```
 
-Release 换对应目录。`df_quant_exec` 的构建仍按 §3，不新增路由 C++ target；接口测试只执行所选专家，不聚合输出。[代码]
+Release 换对应目录。上述参照接口测试复用 `df_quant_exec`，只执行所选专家，不聚合输出；P0024 的生产路由使用独立 `df_core_exec`，不改变原命令语义。[代码]
+
+生产路由增量验证使用下列命令；所有路径从源码目录外运行时换绝对路径。`cpu-asan-core` 同 §3 的 sanitizer 环境，但 scope 为 core，不扩大原 `cpu-asan` 的 quant-only 注册。[D][代码]
+
+```bash
+cmake --preset cpu-debug
+cmake --build --preset cpu-debug --target df_core_exec df_router_consumer df_quant_exec
+ctest --preset cpu-debug -R '^core\.(router\.(consumer|parity|contract|harness|combination)|compile_flags)$' --output-on-failure --no-tests=error
+cmake --preset cpu-asan-core
+cmake --build --preset cpu-asan-core --target df_core_exec df_router_consumer
+ctest --preset cpu-asan-core --output-on-failure --no-tests=error
+PYTHONDONTWRITEBYTECODE=1 python3 tests/core/router_sensitivity.py
+```
+
+Release 换 `cpu-release`。`test_router_parity.py --exe <df_core_exec> --suite parity|contract|harness` 可单跑；`--suite combination` 另须 `--expert-exe <df_quant_exec>`。独立 core 执行器只承载路由/私有算术与存储探针，不复制专家协议；组合复用既有专家执行器。敏感性脚本仅在临时源码副本编译变体，独立运行、不进入 CTest、不修改工作树或冻结数据。契约见 [ROUTER §6](ROUTER.md#6-生产-cpu-scalar)，证据归 P0024。[代码]
 
 生产量化套件由上述三种 CPU preset 的 CTest 运行，也可单独调用驱动；各脚本的 `--suite` 见测试清单。临时生产变体敏感性单独运行，不进入每次 CTest，证据见对应 P。以下命令不需要权重或 GPU；源码目录外运行时将脚本与执行器路径换成绝对路径。[代码]
 
@@ -204,6 +223,6 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/expert_sensitivity.py
 
 SwiGLU 与完整专家的同类型别名由公共入口或同核心 trace 入口验证；无法合法同时构造 BF16/FP32 数组的混型交叠，仅调用生产共用的私有 byte-range 存储校验。该探针要求其他元数据合法，否则按协议错误退出，不把非法 typed span 或响应解析失败作为拒绝证据；完整专家的阶段拒绝与存储负控证据见 P0022。[代码]
 
-**八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。`quant.dequant.{parity,multiply}`、`quant.compute.parity`、`quant.act_quant`、生产 `quant.act_quant.{parity,contract,combination}`、`quant.linear.{parity,contract}`、`quant.swiglu.{parity,contract}` 与 `quant.expert.{parity,contract}` 的定向集合使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
+**八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。生产 `core.router.parity` 的定向集合也覆盖上述控制模式及两种状态位初值。`quant.dequant.{parity,multiply}`、`quant.compute.parity`、`quant.act_quant`、生产 `quant.act_quant.{parity,contract,combination}`、`quant.linear.{parity,contract}`、`quant.swiglu.{parity,contract}` 与 `quant.expert.{parity,contract}` 的定向集合使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
 
 `bb.*` 工件只在 `tests/cpu/build_baseline/`，是构建基线的测试件，不是引擎模块。[代码] 仓库检查 `tools/check_repo.py` 仍按 AGENTS.md 工作流独立执行，不由 CTest 替代。

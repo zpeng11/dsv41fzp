@@ -14,6 +14,9 @@ include(DfVersion)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 add_subdirectory(src/quant)
+if(NOT DF_TEST_SCOPE STREQUAL "quant")
+  add_subdirectory(src/core)
+endif()
 
 enable_testing()
 add_subdirectory(tests)

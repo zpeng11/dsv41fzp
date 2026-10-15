@@ -27,6 +27,9 @@ PROFILES = {
         "bb_contract_strict": (["-std=c++20", "-O2", "-mfma"] + STRICT, ["-ffp-contract=fast"]),
         "bb_contract_fast": (["-std=c++20", "-O2", "-mfma", "-ffp-contract=fast"], STRICT),
         "df_quant": (["-std=c++20"] + STRICT, ["-mfma", "-fno-exceptions"]),
+        "df_core": (["-std=c++20"] + STRICT, ["-mfma", "-fno-exceptions"]),
+        "df_core_exec": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
+        "df_router_consumer": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
         "df_quant_exec": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
         "df_linear_consumer": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
         "df_swiglu_consumer": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
@@ -38,6 +41,12 @@ PROFILES = {
         "df_linear_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
         "df_swiglu_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
         "df_expert_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
+    },
+    "core-sanitize": {
+        "df_quant": (["-std=c++20"] + STRICT + SANITIZE, ["-mfma", "-fno-exceptions"]),
+        "df_core": (["-std=c++20"] + STRICT + SANITIZE, ["-mfma", "-fno-exceptions"]),
+        "df_core_exec": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
+        "df_router_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
     },
 }
 

@@ -29,12 +29,23 @@
         "DF_SANITIZE": "ON",
         "DF_TEST_SCOPE": "quant"
       }
+    },
+    {
+      "name": "cpu-asan-core",
+      "inherits": "cpu-base",
+      "displayName": "CPU Debug, ASan+UBSan, core only",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "DF_SANITIZE": "ON",
+        "DF_TEST_SCOPE": "core"
+      }
     }
   ],
   "buildPresets": [
     { "name": "cpu-debug", "configurePreset": "cpu-debug" },
     { "name": "cpu-release", "configurePreset": "cpu-release" },
-    { "name": "cpu-asan", "configurePreset": "cpu-asan" }
+    { "name": "cpu-asan", "configurePreset": "cpu-asan" },
+    { "name": "cpu-asan-core", "configurePreset": "cpu-asan-core" }
   ],
   "testPresets": [
     {
@@ -49,6 +60,15 @@
       "name": "cpu-asan",
       "inherits": "cpu-base",
       "configurePreset": "cpu-asan",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1:exitcode=86",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "cpu-asan-core",
+      "inherits": "cpu-base",
+      "configurePreset": "cpu-asan-core",
       "environment": {
         "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1:exitcode=86",
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
