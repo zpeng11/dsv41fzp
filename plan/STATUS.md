@@ -11,7 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
-| [P0021 — 单 token SwiGLU 非线性桥生产 scalar](p0021-swiglu-bridge-scalar.md) | active | 候选实现及内部评审修复完成；待提交后干净检出复现和用户代码审议，不提前实现完整专家 |
+| [P0021 — 单 token SwiGLU 非线性桥生产 scalar](p0021-swiglu-bridge-scalar.md) | active | 实现与验证已提交（`c5634d1`），干净检出复现通过；待用户审议实现、证据与知识处置后结项，不提前实现完整专家 |
 
 ## 已验收入口
 

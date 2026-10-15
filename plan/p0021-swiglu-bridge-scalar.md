@@ -40,7 +40,10 @@ followups: []
 
 ### 最终证据
 
-候选实现已完成，提交后的干净检出证据待回填；此前工作树的中间结果不作为最终证据。
+- ENV-A；验收工件 `c5634d100b934ce9056d8300a4b7f9c5e0c5b470`，VERSION 0.1.18，dirty=false。`git clone --no-local --single-branch --branch p0021-swiglu-bridge-scalar` 至 `/tmp/p0021-clean2-20rjuh0f/repo`，配置并构建 cpu-debug/cpu-release/cpu-asan 后从源码目录外 `ctest --no-tests=error --output-on-failure`：Debug 37/37、Release 37/37、ASan 24/24，无编译告警、skip 或非预期报告；sanitizer 环境按 BUILD §3。
+- 同一检出从源码目录外运行 `tests/quant/swiglu_sensitivity.py`：9/9 生产变体以完成调用的数值/阶段 mismatch 检出，pristine 复测与受保护文件哈希不变；协议故障均不计数值证据。三 preset 生成的 `silu_table.h` 逐字节一致（SHA-256 `9489af97…b48b3`）。
+- 覆盖：默认 MXCSR 下穷举全部 65,536 个 BF16 gate 编码的普通+trace 逐阶段 parity；定向与契约集合（60 例，含全部零偏移写前缀别名拒绝、相邻/只读/尾部接受、空输入、非法权重、trace 形状及 64 位边界计数溢出探针）在 16 种 MXCSR 状态下通过；harness 含协议负例、快照/间隙/加毒及驱动退出门禁。
+- 干净检出 `check_repo.py --range 8f0e240..HEAD --audit --strict` E=0 W=0 I=0；`git diff --check` 通过，改动 Markdown 路径/锚点可解析；未触碰 `ref/`、只读镜像、冻结数据、AGENTS 与 VERSION；运行后检出仍干净。日志与审计在 `scratch/p0021-final/`，为临时工件。
 
 ### 评审处置
 
@@ -52,10 +55,11 @@ followups: []
 ### 提交
 
 - `ed20ca2`：接受 D0016、登记 P0021 active 并同步 STATUS。
-- 候选实现提交与提交后复现结果待回填。
+- `b08ca28`：生产 SwiGLU 双重载、构建期 SiLU 表、执行器/consumer/parity/敏感性测试与 EXPERT/BUILD/MODEL 归档；携带 `Oracle: tests/quant/test_swiglu_parity.py`。
+- `c5634d1`：共用标量计数检查与边界溢出探针，补齐失败契约验收；携带同一 `Oracle:`。
 
 ## 收尾
 
-- 验收或停止依据：active；候选生产桥及独立评审修复已完成，待提交后复现及用户代码、证据审议，不以内部评审代替人工验收。
-- 知识处置：pending；生产契约已写入 [EXPERT §5](../docs/EXPERT.md#5-生产-swiglu-bridge)，BUILD/MODEL 路由及 D0016 已到位，待用户审议知识处置。
+- 验收或停止依据：active；除知识与人工收尾外七项验收已成立，最终工件的干净检出复现与范围审计通过（见最终证据）。待用户审议实现、证据及知识处置后结项并同步 STATUS；不以内部评审与机械检查代替人工验收。
+- 知识处置：pending；生产契约已写入 [EXPERT §5](../docs/EXPERT.md#5-生产-swiglu-bridge)，BUILD/MODEL 路由及 D0016 已到位，处置结论待用户审议。
 - 剩余义务：本项完成后，完整单 token FP4 专家生产实现仍须另立后续 P，组合 W1/W3、非线性桥、第二次量化与 W2，并独立处理三矩阵统一预校验、workspace 和失败原子性。
