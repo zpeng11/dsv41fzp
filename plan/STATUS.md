@@ -11,7 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
-| [P0023 — 单 token MoE 路由 CPU 参照与独立验证](p0023-router-oracle.md) | active | D0018 已接受；实施路由参照、独立验证与合成专家接口衔接 |
+| [P0023 — 单 token MoE 路由 CPU 参照与独立验证](p0023-router-oracle.md) | active | 路由参照、独立验证与专家接口已提交，干净检出 Debug/Release 增量通过；待人工审议实现、证据及知识处置 |
 
 ## 已验收入口
 
