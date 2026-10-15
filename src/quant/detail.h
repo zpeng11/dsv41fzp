@@ -1,6 +1,7 @@
 #pragma once
 
 #include "df/quant/codec.h"
+#include "df/quant/expert.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -80,6 +81,31 @@ struct SwigluTrace {
   std::span<std::uint32_t> gated_bits;
   std::span<std::uint32_t> weighted_bits;
 };
+
+struct ExpertCounts {
+  std::size_t input_groups;
+  std::size_t hidden_groups;
+  std::size_t w1_weight_bytes;
+  std::size_t w1_scale_bytes;
+  std::size_t w2_weight_bytes;
+  std::size_t w2_scale_bytes;
+  std::size_t w3_weight_bytes;
+  std::size_t w3_scale_bytes;
+};
+
+ExpertCounts check_expert_counts(std::size_t input_count, std::size_t w1_n, std::size_t w1_k,
+                                 std::size_t w2_n, std::size_t w2_k, std::size_t w3_n,
+                                 std::size_t w3_k, std::size_t out_count, bool traced);
+void check_expert_storage(std::span<const std::span<const std::byte>> reads,
+                          std::span<const std::span<std::byte>> scratch_writes,
+                          std::span<std::byte> out, std::size_t out_write_bytes);
+
+void trace_expert(std::span<const std::uint16_t> input, ExpertMatrix w1, ExpertMatrix w2,
+                  ExpertMatrix w3, ExpertWorkspace work, std::span<std::uint16_t> out,
+                  const SwigluTrace& trace);
+void trace_expert(std::span<const std::uint16_t> input, ExpertMatrix w1, ExpertMatrix w2,
+                  ExpertMatrix w3, std::uint32_t route_weight_bits, ExpertWorkspace work,
+                  std::span<std::uint16_t> out, const SwigluTrace& trace);
 
 void trace_swiglu(std::span<const std::uint16_t> gate, std::span<const std::uint16_t> up,
                   std::span<std::uint16_t> out, const SwigluTrace& trace);

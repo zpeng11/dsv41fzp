@@ -26,5 +26,7 @@ df_add_python_test(tools.check_repo "${PROJECT_SOURCE_DIR}/tests/tools/test_chec
 df_add_python_test(tools.ckpt_inventory "${PROJECT_SOURCE_DIR}/tests/tools/test_ckpt_inventory.py")
 df_add_python_test(tools.ckpt_expert "${PROJECT_SOURCE_DIR}/tests/tools/test_ckpt_expert.py"
   --exe $<TARGET_FILE:df_quant_exec>)
+df_add_python_test(tools.ckpt_expert_mlp "${PROJECT_SOURCE_DIR}/tests/tools/test_ckpt_expert_mlp.py"
+  --exe $<TARGET_FILE:df_quant_exec>)
 df_add_python_test(tools.ckpt_linear "${PROJECT_SOURCE_DIR}/tests/tools/test_ckpt_linear.py"
   --exe $<TARGET_FILE:df_quant_exec>)

@@ -14,7 +14,7 @@ add_custom_command(
   VERBATIM)
 
 add_library(df_quant STATIC codec.cpp dequant.cpp compute.cpp act_quant.cpp linear.cpp swiglu.cpp
-            contract.h detail.h "${DF_SILU_TABLE_HEADER}")
+            expert.cpp contract.h detail.h "${DF_SILU_TABLE_HEADER}")
 target_include_directories(df_quant PUBLIC "${PROJECT_SOURCE_DIR}/include"
                             PRIVATE "${PROJECT_BINARY_DIR}/generated")
 target_compile_features(df_quant PUBLIC cxx_std_20)

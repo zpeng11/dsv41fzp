@@ -2,7 +2,7 @@
 
 本页归档 C++ 构建契约、操作命令与支持环境。选择理由见 [D0005](../plan/decisions/d0005-cpu-build-toolchain.md) 与 [D0007](../plan/decisions/d0007-quant-integer-dequant.md)（`cpu-asan`），构建基线证据见 [P0009](../plan/p0009-cpu-cpp-build-baseline.md)；数值入口的状态与验收证据由 [STATUS](../plan/STATUS.md) 路由，规格见各契约页。
 
-**来源标记**：**[D]** D0005/D0007/D0013/D0016 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
+**来源标记**：**[D]** D0005/D0007/D0013/D0016/D0017 决策 · **[代码]** 本仓构建文件（`CMakeLists.txt`、`CMakePresets.json`、`cmake/`、`tests/CMakeLists.txt`）· **[实测]** 下述支持环境中的实测结果。
 
 ## 1. 支持环境
 
@@ -113,10 +113,15 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `quant.swiglu.contract` | 等长、容量、有限 route weight、实际写前缀别名、trace 形状/别名、空输入及失败原子性；输入可含非有限 BF16 并按 EXPERT 传播；私有标量探针以 64 位边界计数验证输入/trace 字节计数溢出拒绝 |
 | `quant.swiglu.harness` | SwiGLU 协议、响应宽度、执行器故障、输入快照、共享间隙及 ASan 加毒有效性均传播到驱动失败 |
 | `quant.swiglu.consumer` | 仅使用公共头和 df_quant 的独立 C++ 调用，手写普通/加权输出、空输入、非有限传播、尾部与拒绝原子性 |
+| `quant.expert.parity` | 完整专家普通/私有观测对照 `ref/expert.py`，核对两次量化、双投影、bridge 阶段与 W2；不重复 SiLU 全域证明 |
+| `quant.expert.contract` | 三矩阵与工作区预检、输出尾部别名、计数/字节存储探针；区分参数错误全存储不变与 hidden 非有限拒绝的完整 out 不变 |
+| `quant.expert.harness` | 完整专家协议、执行器故障、存储快照及 ASan 加毒有效性均传播到驱动失败 |
+| `quant.expert.consumer` | 仅使用公共头和 df_quant 的完整专家普通/加权入口、手算结果及拒绝边界 |
 | `tools.check_repo` | `tests/tools/test_check_repo.py` |
 | `tools.ckpt_inventory` | `tests/tools/test_ckpt_inventory.py`：合成 safetensors 上的每类结构与 index 拒绝、预期比对的缺失/多余/dtype/shape 检出、小配置的手算张量计数与 shape 抽查、扫描计数与逐元素朴素计数一致且不随分块与进程数变化 |
 | `tools.ckpt_expert` | `tests/tools/test_ckpt_expert.py`：合成 safetensors 的独立行字节与读取区间期望、权重/scale 配对、错误拒绝、生产组合 parity 和故障传播；通过 `df_quant_exec` 消费原始编码，不依赖真实 checkpoint |
 | `tools.ckpt_linear` | `tests/tools/test_ckpt_linear.py`：合成完整 w1 的独立字节和全部读取区间、生产线性全输出与失败传播；不依赖真实 checkpoint |
+| `tools.ckpt_expert_mlp` | `tests/tools/test_ckpt_expert_mlp.py`：合成专家完整三矩阵读取、逐阶段生产组合和工具失败传播；不依赖真实 checkpoint |
 
 计算参照与动态激活量化参照的全部必选验收也可单独运行；从源码目录外运行时使用脚本绝对路径。两者仅依赖标准库，不初始化 Torch/TileLang/CUDA，不依赖目标机、权重、设备 dump 或网络；错误结果、异常或 skip 使命令非零退出。验证方法与契约分别以 [COMPUTE](COMPUTE.md) 与 [ACTQUANT](ACTQUANT.md) 为唯一来源。[代码][实测]
 
@@ -169,14 +174,24 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/linear_sensitivity.py
 
 `linear_sensitivity.py` 在临时源码副本中验证生产变体检出，门禁见 P0019。该命令需要 C++ 编译器（可用 `--cxx` 指定），不进入每次 CTest，不改工作树或冻结数据。[代码]
 
-`tools.ckpt_expert` 与 `tools.ckpt_linear` 只在 CPU Debug/Release 注册，使用临时合成文件与当前构建的执行器；不扩大 quant 专用 sanitizer 范围。源码目录外运行上述入口时，脚本、快照、执行器和报告目标均使用绝对路径。[代码]
+**完整专家三矩阵验证**由 `tools/ckpt_expert_mlp.py` 独立执行，复用既有结构校验和有界行读取，固定 `layers.0.ffn.experts.0` 的完整 w1/w3/w2。人工输入沿用上述模式，并覆盖省略/显式外部权重；普通与观测入口均完成生产调用，阶段对照 `ref/expert.py`，报告保留全部载荷区间、输入/载荷指纹、身份和比较结果。报告写入保护、缺权重失败及退出码沿用上述工具约束，旧行消费和 w1-only 工具语义不变。[代码]
+
+```bash
+python3 tools/ckpt_expert_mlp.py <snapshot> --exe build/cpu-release/tests/quant/df_quant_exec --json build/ckpt-expert-mlp.json
+PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/test_expert_parity.py --exe build/cpu-release/tests/quant/df_quant_exec --suite parity
+PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/expert_sensitivity.py
+```
+
+离线工具可重复传入 `--exe`，同一次载荷读取与 oracle 阶段结果供多个执行器分别验证，报告逐执行器记录身份与比较，不建立持久期望缓存。完整专家驱动的 `--suite` 为 `parity`、`contract` 或 `harness`；敏感性在临时副本中变更组合接线，不改已验收数值核心或工作树。私有观测保留真实生产阶段，不由 Python 填入中间结果。契约见 [EXPERT §6](EXPERT.md#6-生产完整专家)，覆盖边界见 [MODEL §4](MODEL.md#4-精确性链条)，验收证据见 [P0022](../plan/p0022-expert-scalar.md)。[代码]
+
+`tools.ckpt_expert`、`tools.ckpt_linear` 与 `tools.ckpt_expert_mlp` 只在 CPU Debug/Release 注册，使用临时合成文件与当前构建的执行器；不扩大 quant 专用 sanitizer 范围。源码目录外运行上述入口时，脚本、快照、执行器和报告目标均使用绝对路径。[代码]
 
 `quant.compute`、`quant.act_quant` 与 `quant.expert` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。生产 `quant.swiglu.*` 位于 quant 子树，进入三种 CPU preset；全域 gate 穷举仅在 parity 的默认 MXCSR 子步骤执行一次。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
 
-`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}`、`quant.linear.{parity,contract,harness,consumer}`、`quant.swiglu.{parity,contract,harness,consumer}` 与 `quant.compile_flags`（验证 df_quant、df_quant_exec、df_linear_consumer 与 df_swiglu_consumer 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。经协议调用的 quant 套件通过 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法、SwiGLU 计数与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
+`cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}`、`quant.linear.{parity,contract,harness,consumer}`、`quant.swiglu.{parity,contract,harness,consumer}`、`quant.expert.{parity,contract,harness,consumer}` 与 `quant.compile_flags`（验证 df_quant、df_quant_exec 及 linear/swiglu/expert 三个 consumer 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。经协议调用的 quant 套件通过 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法、SwiGLU 计数与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 
-SwiGLU 的同类型别名由公共入口或同核心 trace 入口验证；无法合法同时构造 BF16/FP32 数组的混型交叠，仅调用生产共用的私有 byte-range 存储校验。该探针要求其他元数据合法，否则按协议错误退出，不把非法 typed span 或响应解析失败作为拒绝证据。[代码]
+SwiGLU 与完整专家的同类型别名由公共入口或同核心 trace 入口验证；无法合法同时构造 BF16/FP32 数组的混型交叠，仅调用生产共用的私有 byte-range 存储校验。该探针要求其他元数据合法，否则按协议错误退出，不把非法 typed span 或响应解析失败作为拒绝证据。专家的共享 allocation 按有效写区间并集核对；运行中拒绝探针还核对实际 hidden 阶段与预填状态，并以提前拒绝和共享间隙注错作负控，不能仅凭异常类型认定触达第二次量化。[代码]
 
-**八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。`quant.dequant.{parity,multiply}`、`quant.compute.parity`、`quant.act_quant`、生产 `quant.act_quant.{parity,contract,combination}`、`quant.linear.{parity,contract}` 与 `quant.swiglu.{parity,contract}` 的定向集合使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
+**八模式 MXCSR**（各契约页以此名引用）：默认、向上、向下、向零舍入、FTZ、DAZ、FTZ+DAZ 与解除溢出掩码。执行器或探针回报设置，并在每次被测调用前后核对完整 MXCSR，包含拒绝与异常路径，stdio 在核对窗口外；声明"状态位预置"的套件另在每种模式下分别预置状态位清空与置满。`quant.dequant.{parity,multiply}`、`quant.compute.parity`、`quant.act_quant`、生产 `quant.act_quant.{parity,contract,combination}`、`quant.linear.{parity,contract}`、`quant.swiglu.{parity,contract}` 与 `quant.expert.{parity,contract}` 的定向集合使用八模式，`quant.codec.parity` 只用默认、向上舍入、FTZ、DAZ 四种。量化库和捕获其异常的执行器不得带 `-fno-exceptions`，两个编译选项检查 profile 按 target 检查此项，不将其扩为全仓规则或约束未来 SIMD/CUDA 热路径。[D][代码][实测]
 
 `bb.*` 工件只在 `tests/cpu/build_baseline/`，是构建基线的测试件，不是引擎模块。[代码] 仓库检查 `tools/check_repo.py` 仍按 AGENTS.md 工作流独立执行，不由 CTest 替代。
