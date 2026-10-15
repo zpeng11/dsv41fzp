@@ -29,11 +29,13 @@ PROFILES = {
         "df_quant": (["-std=c++20"] + STRICT, ["-mfma", "-fno-exceptions"]),
         "df_quant_exec": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
         "df_linear_consumer": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
+        "df_swiglu_consumer": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
     },
     "quant-sanitize": {
         "df_quant": (["-std=c++20"] + STRICT + SANITIZE, ["-mfma", "-fno-exceptions"]),
         "df_quant_exec": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
         "df_linear_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
+        "df_swiglu_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
     },
 }
 

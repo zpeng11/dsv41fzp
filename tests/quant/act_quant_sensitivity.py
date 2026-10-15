@@ -107,13 +107,16 @@ def checked_run(command, **kwargs):
 
 def build(directory, cxx):
     executable = directory / 'quant_exec'
+    generated = directory / 'generated/df/quant/silu_table.h'
+    checked_run([sys.executable, '-B', str(ROOT / 'tools/gen_silu_table.py'), str(generated)],
+                env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
     checked_run([cxx, '-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Wpedantic', '-Werror',
                  '-ffp-contract=off', '-fno-fast-math', '-I' + str(directory / 'include'),
-                 '-I' + str(directory / 'src/quant'),
+                 '-I' + str(directory / 'src/quant'), '-I' + str(directory / 'generated'),
                  str(directory / 'quant_exec.cpp'),
                  *[str(directory / 'src/quant' / name) for name in
-                   ('codec.cpp', 'dequant.cpp', 'compute.cpp', 'act_quant.cpp', 'linear.cpp')],
-                 '-o', str(executable)])
+                   ('codec.cpp', 'dequant.cpp', 'compute.cpp', 'act_quant.cpp', 'linear.cpp',
+                    'swiglu.cpp')], '-o', str(executable)])
     return executable
 
 

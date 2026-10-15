@@ -7,7 +7,7 @@
 //             : <data hex token> ... ; <scale hex token> ...
 //   compute:  <op> cap=<n> [overlap=a|w|sa|sb [in_offset=<b>] [out_offset=<b>]] [poison]
 //             : <a codes> ... ; <w bytes> ... ; <scale_a codes> ... ; <scale_b codes> ...
-//   add_fp32: add_fp32 cap=<n> : <left fp32 bits> ... ; <right fp32 bits> ...
+//   add_fp32|multiply_fp32: <op> cap=<n> : <left fp32 bits> ... ; <right fp32 bits> ...
 //   activation: act_quant[_trace] cap=<a capacity> scale_cap=<scale capacity>
 //             [overlap=input_a|input_scale|outputs [in_offset=<b>] [out_offset=<b>]]
 //             [trace_alias=<buffer>,<buffer>|trace_object_alias] [poison]
@@ -19,6 +19,11 @@
 //             [a_cap=K scale_cap=K/32] [workspace] [overlap=<buffer>,<buffer>]
 //             [in_offset=<bytes> out_offset=<bytes>] [poison|poison_writes]
 //             : <BF16 bits> ... ; <row-major packed weights> ... ; <scale_b> ...
+//   P0021: swiglu[_trace] cap=<out capacity> [route=<FP32 bits>]
+//             [overlap=<buffer>,<buffer> in_offset=<bytes> out_offset=<bytes>]
+//             [trace_alias=<buffer>,<buffer>] [trace_shape=<five lengths>] [poison]
+//             : <gate BF16 bits> ... ; <up BF16 bits> ...
+//   P0021 counts: swiglu_counts[_trace] cap=<element count> : (empty payload)
 //   Linear buffers are input,w,sb,a,sa,out. Defaults are exact workspace sizes;
 //   workspace responses are uint32 words: full out, full a, full sa capacities.
 //   poison makes inputs unreadable; poison_writes makes destinations inaccessible.
@@ -90,6 +95,7 @@
 #include "df/quant/compute.h"
 #include "df/quant/dequant.h"
 #include "df/quant/linear.h"
+#include "df/quant/swiglu.h"
 
 namespace {
 
@@ -133,6 +139,8 @@ struct Request {
   bool poison = false;
   bool poison_writes = false;
   bool workspace = false;
+  bool has_route = false;
+  std::uint32_t route = 0;
   bool has_a_cap = false;
   std::size_t a_cap = 0;
   std::vector<std::vector<std::uint64_t>> sections;
@@ -142,9 +150,15 @@ struct Request {
 
 constexpr std::string_view kLinearBuffers[] = {"input", "w", "sb", "a", "sa", "out"};
 constexpr std::string_view kComputeInputs[] = {"a", "w", "sa", "sb"};
+constexpr std::string_view kSwigluBuffers[] = {"gate", "up", "out", "gate_bits", "up_bits",
+                                               "silu_bits", "gated_bits", "weighted_bits"};
 
 bool is_linear(const Request& req) {
   return req.op == "expert_linear_fp32" || req.op == "expert_linear_bf16";
+}
+
+bool is_swiglu(const Request& req) {
+  return req.op == "swiglu" || req.op == "swiglu_trace";
 }
 constexpr std::string_view kActBuffers[] = {"input", "a", "scale", "amax_bits",
     "bounded_amax_bits", "product_bits", "exponent", "quotient_bits", "clamped_bits"};
@@ -205,7 +219,13 @@ Request parse_request(std::string_view line) {
   req.op = std::string(head[0]);
   for (std::size_t i = 1; i < head.size(); ++i) {
     const std::string_view field = head[i];
-    if (field.starts_with("a_cap=")) {
+    if (field.starts_with("route=")) {
+      if (!is_swiglu(req) || req.has_route) die("invalid or duplicate route");
+      const std::uint64_t value = parse_number(field.substr(6), 16);
+      if (value > std::numeric_limits<std::uint32_t>::max()) die("route exceeds FP32 width");
+      req.route = static_cast<std::uint32_t>(value);
+      req.has_route = true;
+    } else if (field.starts_with("a_cap=")) {
       if (!is_linear(req) || req.has_a_cap) die("invalid or duplicate a_cap");
       req.a_cap = parse_number(field.substr(6), 10);
       req.has_a_cap = true;
@@ -244,17 +264,22 @@ Request parse_request(std::string_view line) {
     } else if (field.starts_with("overlap=")) {
       if (req.has_overlap) die("duplicate overlap field");
       const auto name = field.substr(8);
-      if (is_linear(req)) {
+      if (is_linear(req) || is_swiglu(req)) {
         const auto comma = name.find(',');
-        if (comma == std::string_view::npos) die("linear overlap needs two buffers");
-        const auto index = [](std::string_view value) {
-          const auto* hit = std::find(std::begin(kLinearBuffers), std::end(kLinearBuffers), value);
-          if (hit == std::end(kLinearBuffers)) die("unknown linear buffer");
-          return static_cast<std::size_t>(hit - std::begin(kLinearBuffers));
+        if (comma == std::string_view::npos) die("overlap needs two buffers");
+        const auto index = [&](std::string_view value) {
+          if (is_linear(req)) {
+            const auto* hit = std::find(std::begin(kLinearBuffers), std::end(kLinearBuffers), value);
+            if (hit == std::end(kLinearBuffers)) die("unknown linear buffer");
+            return static_cast<std::size_t>(hit - std::begin(kLinearBuffers));
+          }
+          const auto* hit = std::find(std::begin(kSwigluBuffers), std::end(kSwigluBuffers), value);
+          if (hit == std::end(kSwigluBuffers)) die("unknown SwiGLU buffer");
+          return static_cast<std::size_t>(hit - std::begin(kSwigluBuffers));
         };
         req.act_first = index(name.substr(0, comma));
         req.act_second = index(name.substr(comma + 1));
-        if (req.act_first == req.act_second) die("linear overlap needs distinct buffers");
+        if (req.act_first == req.act_second) die("overlap needs distinct buffers");
       } else if (req.op == "act_quant" || req.op == "act_quant_trace") {
         if (name == "input_a") { req.act_first = 0; req.act_second = 1; }
         else if (name == "input_scale") { req.act_first = 0; req.act_second = 2; }
@@ -267,24 +292,33 @@ Request parse_request(std::string_view line) {
       }
       req.has_overlap = true;
     } else if (field == "trace_object_alias") {
-      if (req.op != "act_quant_trace") die("trace_object_alias requires trace entry");
+      if (req.op != "act_quant_trace") die("trace_object_alias requires activation trace entry");
       if (req.trace_object_alias) die("duplicate trace_object_alias field");
       req.trace_object_alias = true;
     } else if (field.starts_with("trace_alias=")) {
-      if (req.op != "act_quant_trace") die("trace_alias requires trace entry");
+      const bool activation = req.op == "act_quant_trace";
+      const bool swiglu = req.op == "swiglu_trace";
+      if (!activation && !swiglu) die("trace_alias requires trace entry");
       if (req.has_trace_alias) die("duplicate trace_alias field");
       const auto pair = field.substr(12);
       const auto comma = pair.find(',');
       if (comma == std::string_view::npos) die("trace_alias requires two buffer names");
-      const auto index = [](std::string_view buffer) {
-        const auto* hit = std::find(std::begin(kActBuffers), std::end(kActBuffers), buffer);
-        if (hit == std::end(kActBuffers)) die("unknown activation buffer");
-        return static_cast<std::size_t>(hit - std::begin(kActBuffers));
+      const auto index = [&](std::string_view buffer) {
+        if (activation) {
+          const auto* hit = std::find(std::begin(kActBuffers), std::end(kActBuffers), buffer);
+          if (hit == std::end(kActBuffers)) die("unknown activation buffer");
+          return static_cast<std::size_t>(hit - std::begin(kActBuffers));
+        }
+        const auto* hit = std::find(std::begin(kSwigluBuffers), std::end(kSwigluBuffers), buffer);
+        if (hit == std::end(kSwigluBuffers)) die("unknown SwiGLU buffer");
+        return static_cast<std::size_t>(hit - std::begin(kSwigluBuffers));
       };
       req.act_first = index(pair.substr(0, comma));
       req.act_second = index(pair.substr(comma + 1));
-      if (req.act_first == req.act_second || (req.act_first < 3 && req.act_second < 3)) {
-        die("trace_alias needs distinct buffers including a trace stage");
+      const std::size_t writable_start = activation ? 3 : 2;
+      if (req.act_first == req.act_second ||
+          (req.act_first < writable_start && req.act_second < writable_start)) {
+        die("trace_alias needs distinct buffers including a writable range");
       }
       req.has_trace_alias = true;
     } else if (field.starts_with("in_offset=")) {
@@ -704,16 +738,16 @@ std::string run_trace(const Request& req) {
   return ok_response(out.get(), req.cap);
 }
 
-// Private probe of the production FP32 adder; every bit pattern is a valid operand.
-std::string run_add(const Request& req) {
+// Private probes of production FP32 helpers; every bit pattern is a valid operand.
+std::string run_binary_fp32(const Request& req, bool multiply) {
   if (!req.has_cap || req.has_shape || req.has_scale_shape || req.alias || req.scale_alias ||
       has_compute_fields(req)) {
-    die("add_fp32 request takes only cap=");
+    die("binary FP32 request takes only cap=");
   }
-  require_sections(req, 2, "add_fp32");
+  require_sections(req, 2, multiply ? "multiply_fp32" : "add_fp32");
   const std::size_t n = req.sections[0].size();
   if (req.sections[1].size() != n || req.cap < n) {
-    die("add_fp32 requires one right operand per left operand and cap >= pairs");
+    die("binary FP32 request requires one right operand per left operand and cap >= pairs");
   }
   const std::size_t out_bytes = buffer_bytes(req.cap, sizeof(std::uint32_t));
   const auto out = std::make_unique<std::uint32_t[]>(req.cap);
@@ -726,9 +760,10 @@ std::string run_add(const Request& req) {
   }
   for (std::size_t i = 0; i < n; ++i) {
     const unsigned before = _mm_getcsr();
-    out[i] = q::detail::add_fp32(left[i], right[i]);
+    out[i] = multiply ? q::detail::multiply_fp32(left[i], right[i])
+                      : q::detail::add_fp32(left[i], right[i]);
     if (_mm_getcsr() != before) {
-      die("add_fp32 changed MXCSR");
+      die("binary FP32 helper changed MXCSR");
     }
   }
   return ok_response(out.get(), req.cap);
@@ -911,6 +946,205 @@ std::string run_act_quant(const Request& req, std::string_view fault) {
     }
   }
   return response;
+}
+
+void poison_swiglu(std::span<const std::uint16_t> gate, std::span<const std::uint16_t> up,
+                    bool poisoned) {
+#if defined(__SANITIZE_ADDRESS__)
+  for (const auto input : {gate, up}) {
+    if (poisoned) ASAN_POISON_MEMORY_REGION(input.data(), input.size_bytes());
+    else ASAN_UNPOISON_MEMORY_REGION(input.data(), input.size_bytes());
+  }
+#else
+  (void)gate;
+  (void)up;
+  (void)poisoned;
+#endif
+}
+
+std::string run_swiglu(const Request& req, std::string_view fault) {
+  const bool traced = req.op == "swiglu_trace";
+  if (!req.has_cap || req.has_shape || req.has_scale_shape || req.has_scale_cap ||
+      req.has_a_cap || req.workspace || req.poison_writes || req.alias || req.scale_alias ||
+      req.trace_object_alias || (!traced && (req.has_trace_shape || req.has_trace_alias))) {
+    die("SwiGLU requires cap= and no foreign fields");
+  }
+  require_sections(req, 2, "SwiGLU");
+  if (req.has_overlap && req.has_trace_alias) die("overlap and trace_alias are mutually exclusive");
+  const bool shared_pair = req.has_overlap || req.has_trace_alias;
+  if ((req.has_in_offset || req.has_out_offset) && !shared_pair) die("SwiGLU offsets require an alias pair");
+  if (req.has_overlap && traced && (req.act_first >= 3 || req.act_second >= 3))
+    die("trace buffers require trace_alias");
+  if (req.has_overlap && !traced && (req.act_first >= 3 || req.act_second >= 3))
+    die("ordinary SwiGLU has no trace buffers");
+
+  const std::size_t gate_count = req.sections[0].size();
+  const std::size_t up_count = req.sections[1].size();
+  std::vector<std::size_t> shape(5, gate_count);
+  if (req.has_trace_shape) {
+    if (req.trace_shape.size() != 5) die("SwiGLU trace_shape requires five lengths");
+    shape = req.trace_shape;
+  }
+  const std::size_t count = traced ? 8 : 3;
+  std::size_t lengths[8] = {buffer_bytes(gate_count, 2), buffer_bytes(up_count, 2),
+                            buffer_bytes(req.cap, 2)};
+  for (std::size_t i = 3; i < count; ++i) lengths[i] = buffer_bytes(shape[i - 3], 4);
+  const std::size_t widths[8] = {2, 2, 2, 4, 4, 4, 4, 4};
+  const std::size_t alignments[8] = {2, 2, 2, 4, 4, 4, 4, 4};
+  const auto deleter = [](void* pointer) { ::operator delete(pointer); };
+  using Owner = std::unique_ptr<void, decltype(deleter)>;
+  Owner owners[] = {Owner(nullptr, deleter), Owner(nullptr, deleter), Owner(nullptr, deleter),
+                    Owner(nullptr, deleter), Owner(nullptr, deleter), Owner(nullptr, deleter),
+                    Owner(nullptr, deleter), Owner(nullptr, deleter)};
+  Owner shared(nullptr, deleter);
+  unsigned char* buffers[8] = {};
+  unsigned char* shared_base = nullptr;
+  std::size_t shared_size = 0;
+  if (shared_pair) {
+    for (const auto& [index, offset] : {std::pair{req.act_first, req.in_offset},
+                                       std::pair{req.act_second, req.out_offset}}) {
+      if (index >= count) die("SwiGLU alias names an unavailable buffer");
+      if (offset % alignments[index]) die("unaligned SwiGLU alias offset");
+      shared_size = std::max(shared_size, extent(offset, lengths[index]));
+    }
+    shared.reset(::operator new(shared_size));
+    shared_base = static_cast<unsigned char*>(shared.get());
+    std::memset(shared_base, kFill, shared_size);
+    buffers[req.act_first] = shared_base + req.in_offset;
+    buffers[req.act_second] = shared_base + req.out_offset;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (!buffers[i]) {
+      owners[i].reset(::operator new(lengths[i]));
+      buffers[i] = static_cast<unsigned char*>(owners[i].get());
+    }
+    std::memset(buffers[i], kFill, lengths[i]);
+  }
+  for (std::size_t section = 0; section < 2; ++section) {
+    for (std::size_t i = 0; i < req.sections[section].size(); ++i) {
+      const auto value = narrow_token<std::uint16_t>(req.sections[section][i]);
+      std::memcpy(buffers[section] + 2 * i, &value, 2);
+    }
+  }
+  std::vector<unsigned char> before[8];
+  for (std::size_t i = 0; i < count; ++i) before[i].assign(buffers[i], buffers[i] + lengths[i]);
+  std::vector<unsigned char> before_shared;
+  if (shared_pair) before_shared.assign(shared_base, shared_base + shared_size);
+
+  const auto overlaps = [](std::size_t first, std::size_t first_size,
+                           std::size_t second, std::size_t second_size) {
+    return first_size != 0 && second_size != 0 && first < extent(second, second_size) &&
+           second < extent(first, first_size);
+  };
+  const bool mixed_overlap = shared_pair && widths[req.act_first] != widths[req.act_second] &&
+      overlaps(req.in_offset, lengths[req.act_first], req.out_offset, lengths[req.act_second]);
+  const std::span<const std::uint16_t> gate(reinterpret_cast<const std::uint16_t*>(buffers[0]), gate_count);
+  const std::span<const std::uint16_t> up(reinterpret_cast<const std::uint16_t*>(buffers[1]), up_count);
+  const std::span<std::uint16_t> out(reinterpret_cast<std::uint16_t*>(buffers[2]), req.cap);
+  q::detail::SwigluTrace trace;
+  if (traced && !mixed_overlap) {
+    trace.gate_bits = {reinterpret_cast<std::uint32_t*>(buffers[3]), shape[0]};
+    trace.up_bits = {reinterpret_cast<std::uint32_t*>(buffers[4]), shape[1]};
+    trace.silu_bits = {reinterpret_cast<std::uint32_t*>(buffers[5]), shape[2]};
+    trace.gated_bits = {reinterpret_cast<std::uint32_t*>(buffers[6]), shape[3]};
+    trace.weighted_bits = {reinterpret_cast<std::uint32_t*>(buffers[7]), shape[4]};
+  }
+  if (req.poison && !mixed_overlap) poison_swiglu(gate, up, true);
+  const int outcome = call_guarded([&] {
+    if (mixed_overlap) {
+      const bool trace_shape_valid = !traced ||
+          std::all_of(shape.begin(), shape.end(), [&](std::size_t value) { return value == gate_count; });
+      if (gate_count != up_count || req.cap < gate_count || !trace_shape_valid ||
+          (req.has_route && !finite_bits(req.route))) {
+        die("mixed SwiGLU alias probe requires otherwise valid metadata");
+      }
+      std::array<std::span<std::byte>, 6> writes{};
+      writes[0] = {reinterpret_cast<std::byte*>(buffers[2]), 2 * gate_count};
+      if (traced) {
+        for (std::size_t i = 1; i < writes.size(); ++i)
+          writes[i] = {reinterpret_cast<std::byte*>(buffers[i + 2]), 4 * shape[i - 1]};
+      }
+      q::detail::check_swiglu_storage(
+          {reinterpret_cast<const std::byte*>(buffers[0]), 2 * gate_count},
+          {reinterpret_cast<const std::byte*>(buffers[1]), 2 * up_count}, writes);
+    } else if (traced) {
+      if (req.has_route) q::detail::trace_swiglu(gate, up, req.route, out, trace);
+      else q::detail::trace_swiglu(gate, up, out, trace);
+    } else if (req.has_route) {
+      q::swiglu(gate, up, req.route, out);
+    } else {
+      q::swiglu(gate, up, out);
+    }
+  });
+  if (req.poison && !mixed_overlap) poison_swiglu(gate, up, false);
+  if (outcome != kOk) {
+    if (fault == "reject-input-write" && gate_count) buffers[0][0] ^= 1;
+    bool changed = shared_pair && buffer_changed(before_shared.data(), shared_base, shared_size);
+    for (std::size_t i = 0; i < count; ++i)
+      changed |= buffer_changed(before[i].data(), buffers[i], lengths[i]);
+    return err_response(outcome, changed);
+  }
+  if (gate_count != up_count || req.cap < gate_count) die("SwiGLU accepted invalid metadata");
+  const std::size_t used[8] = {0, 0, buffer_bytes(gate_count, 2),
+                               buffer_bytes(shape[0], 4), buffer_bytes(shape[1], 4),
+                               buffer_bytes(shape[2], 4), buffer_bytes(shape[3], 4),
+                               buffer_bytes(shape[4], 4)};
+  const auto shared_writable = [&](std::size_t offset) {
+    if (!shared_pair) return false;
+    for (std::size_t index : {req.act_first, req.act_second}) {
+      if (index < 2) continue;
+      const std::size_t start = static_cast<std::size_t>(buffers[index] - shared_base);
+      if (offset >= start && offset - start < used[index]) return true;
+    }
+    return false;
+  };
+  if (fault == "input-write" && gate_count) buffers[0][0] ^= 1;
+  if (fault == "shared-gap-write" && shared_pair) {
+    for (std::size_t i = 0; i < shared_size; ++i) {
+      if (!shared_writable(i)) { shared_base[i] ^= 1; break; }
+    }
+  }
+  for (std::size_t i = 0; i < 2; ++i) {
+    if (buffer_changed(before[i].data(), buffers[i], lengths[i])) die("SwiGLU input changed on success");
+  }
+  for (std::size_t i = 2; i < count; ++i) {
+    if (shared_pair && (i == req.act_first || i == req.act_second)) continue;
+    if (buffer_changed(before[i].data() + used[i], buffers[i] + used[i], lengths[i] - used[i]))
+      die("SwiGLU bytes outside write ranges changed on success");
+  }
+  if (shared_pair) {
+    for (std::size_t i = 0; i < shared_size; ++i) {
+      if (!shared_writable(i) && shared_base[i] != before_shared[i])
+        die("SwiGLU bytes outside write ranges changed on success");
+    }
+  }
+  std::string response = "ok";
+  for (std::size_t i = 0; i < req.cap; ++i) append_hex(response, static_cast<std::uint32_t>(out[i]));
+  if (traced) {
+    for (const auto stage : {trace.gate_bits, trace.up_bits, trace.silu_bits,
+                             trace.gated_bits, trace.weighted_bits}) {
+      for (const auto value : stage) append_hex(response, value);
+    }
+  }
+  return response;
+}
+
+// Private scalar probe of the SwiGLU count checks shared by every production
+// entry; huge element counts stay testable because no span is constructed.
+std::string run_swiglu_counts(const Request& req, bool traced) {
+  if (!req.has_cap || req.has_shape || req.has_scale_shape || req.has_scale_cap ||
+      req.has_a_cap || req.workspace || req.alias || req.scale_alias || req.poison ||
+      req.poison_writes || req.has_overlap || req.has_trace_alias || req.trace_object_alias ||
+      req.has_route || req.has_trace_shape || req.has_in_offset || req.has_out_offset) {
+    die("swiglu_counts takes only cap=");
+  }
+  require_sections(req, 1, "swiglu_counts");
+  if (!req.sections[0].empty()) die("swiglu_counts takes no payload tokens");
+  const int outcome = call_guarded([&] { q::detail::check_swiglu_counts(req.cap, traced); });
+  if (outcome != kOk) {
+    return err_response(outcome, false);
+  }
+  return "ok";
 }
 
 // P0017 composition exists only here: production activation buffers are passed
@@ -1125,6 +1359,10 @@ std::string dispatch(const Request& req, std::string_view fault) {
   using i8 = std::int8_t;
   if (req.op == "expert_linear_fp32") return run_linear<u32>(req, fault);
   if (req.op == "expert_linear_bf16") return run_linear<u16>(req, fault);
+  if (req.op == "swiglu" || req.op == "swiglu_trace") return run_swiglu(req, fault);
+  if (req.op == "swiglu_counts") return run_swiglu_counts(req, false);
+  if (req.op == "swiglu_counts_trace") return run_swiglu_counts(req, true);
+  if (req.has_route) die("route field on another request family");
   if (req.op == "act_quant" || req.op == "act_quant_trace") return run_act_quant(req, fault);
   if (req.op == "act_quant_dot_fp32") return run_act_combination<u32>(req);
   if (req.op == "act_quant_dot_bf16") return run_act_combination<u16>(req);
@@ -1151,7 +1389,8 @@ std::string dispatch(const Request& req, std::string_view fault) {
   if (req.op == "e2m1_to_grid") return run<u8, i8>(req, q::e2m1_to_grid);
   if (req.op == "grid_to_e2m1") return run<i8, u8>(req, q::grid_to_e2m1);
   if (req.op == "multiply_finite") return run_multiply(req);
-  if (req.op == "add_fp32") return run_add(req);
+  if (req.op == "multiply_fp32") return run_binary_fp32(req, true);
+  if (req.op == "add_fp32") return run_binary_fp32(req, false);
   if (req.op == "expert_grouped_dot_fp32") return run_compute<u32>(req);
   if (req.op == "expert_grouped_dot_bf16") return run_compute<u16>(req);
   if (req.op == "expert_grouped_dot_trace") return run_trace(req);
@@ -1218,7 +1457,7 @@ int main(int argc, char** argv) {
   }
   if (fault != "none" && fault != "crash" && fault != "exit" && fault != "garbage" &&
       fault != "mismatch" && fault != "drop" && fault != "input-write" &&
-      fault != "shared-gap-write") {
+      fault != "reject-input-write" && fault != "shared-gap-write") {
     die("unknown --fault value '" + fault + "'");
   }
   if (status != "clear" && status != "set") {

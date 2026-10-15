@@ -172,6 +172,23 @@ std::uint32_t multiply_finite(std::uint32_t left, std::uint32_t right) noexcept 
   return detail::binary_to_fp32(sign, static_cast<std::uint64_t>(left_sig) * right_sig, exponent);
 }
 
+std::uint32_t multiply_fp32(std::uint32_t left, std::uint32_t right) noexcept {
+  constexpr std::uint32_t kSign = 0x80000000u;
+  constexpr std::uint32_t kMagnitude = 0x7FFFFFFFu;
+  constexpr std::uint32_t kInf = 0x7F800000u;
+  constexpr std::uint32_t kQuietNan = 0x7FC00000u;
+  const std::uint32_t left_magnitude = left & kMagnitude;
+  const std::uint32_t right_magnitude = right & kMagnitude;
+  if (left_magnitude > kInf || right_magnitude > kInf) {
+    return kQuietNan;
+  }
+  const std::uint32_t sign = (left ^ right) & kSign;
+  if (left_magnitude == kInf || right_magnitude == kInf) {
+    return left_magnitude == 0 || right_magnitude == 0 ? kQuietNan : sign | kInf;
+  }
+  return multiply_finite(left, right);
+}
+
 }  // namespace detail
 
 void dequantize_expert(std::span<const std::uint8_t> data, Shape data_shape,
