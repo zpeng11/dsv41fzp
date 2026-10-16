@@ -58,6 +58,19 @@ std::uint32_t trace_expert_grouped_dot(std::span<const std::uint8_t> a_codes,
                                        std::span<const std::uint8_t> scale_b,
                                        const DotTrace& trace);
 
+// Same-core FP8 observation (P0028): exact DotTrace lengths, all writes disjoint
+// from reads and each other. Invalid arguments leave output and trace unchanged.
+void trace_fp8_grouped_dot(std::span<const std::uint8_t> a_codes,
+                           std::span<const std::uint8_t> w_codes,
+                           std::span<const std::uint8_t> scale_a,
+                           std::span<const std::uint8_t> scale_b,
+                           std::span<std::uint32_t> out, const DotTrace& trace);
+void trace_fp8_grouped_dot(std::span<const std::uint8_t> a_codes,
+                           std::span<const std::uint8_t> w_codes,
+                           std::span<const std::uint8_t> scale_a,
+                           std::span<const std::uint8_t> scale_b,
+                           std::span<std::uint16_t> out, const DotTrace& trace);
+
 // Activation quantization stages: the first four spans hold K/32 entries, the last
 // two K entries. Codes and scales are supplied through the normal output spans.
 struct ActQuantTrace {

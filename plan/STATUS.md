@@ -11,6 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
+| [P0028 — FP8 块缩放单输出点积生产 scalar](p0028-fp8-grouped-dot-scalar.md) | active | 实现及候选树增量验证到位，待人工审议与已提交干净检出补证 |
 
 ## 已验收入口
 

@@ -34,6 +34,7 @@ PROFILES = {
         "df_linear_consumer": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
         "df_swiglu_consumer": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
         "df_expert_consumer": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
+        "df_fp8_dot_consumer": (["-std=c++20"], STRICT + ["-mfma", "-fno-exceptions"]),
     },
     "quant-sanitize": {
         "df_quant": (["-std=c++20"] + STRICT + SANITIZE, ["-mfma", "-fno-exceptions"]),
@@ -41,6 +42,7 @@ PROFILES = {
         "df_linear_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
         "df_swiglu_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
         "df_expert_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
+        "df_fp8_dot_consumer": (["-std=c++20"] + SANITIZE, STRICT + ["-mfma", "-fno-exceptions"]),
     },
     "core-sanitize": {
         "df_quant": (["-std=c++20"] + STRICT + SANITIZE, ["-mfma", "-fno-exceptions"]),

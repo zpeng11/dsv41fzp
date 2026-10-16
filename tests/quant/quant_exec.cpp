@@ -15,6 +15,15 @@
 //             : <BF16 bits> ...
 //   combination: act_quant_dot_fp32|act_quant_dot_bf16 cap=<n>
 //             : <BF16 bits> ... ; <packed weights> ... ; <scale_b> ...
+//   P0028: fp8_grouped_dot_fp32|fp8_grouped_dot_bf16 cap=<n>
+//             [overlap=a|w|sa|sb [in_offset=<b>] [out_offset=<b>]] [poison]
+//             : <a codes> ... ; <w codes> ... ; <scale_a codes> ... ; <scale_b codes> ...
+//   P0028 trace: fp8_grouped_dot_trace_fp32|fp8_grouped_dot_trace_bf16 cap=<response words>
+//             [out_cap=<output capacity>]
+//             [trace_shape=<six lengths>] [trace_alias=<buffer>,<buffer>]
+//             [in_offset=<b>] [out_offset=<b>] [poison]
+//   P0028 combination: act_quant_fp8_dot_fp32|act_quant_fp8_dot_bf16 cap=<n>
+//             : <BF16 bits> ... ; <FP8 weight codes> ... ; <scale_b> ...
 //   P0019: expert_linear_fp32|expert_linear_bf16 shape=N cap=<out capacity>
 //             [a_cap=K scale_cap=K/32] [workspace] [overlap=<buffer>,<buffer>]
 //             [in_offset=<bytes> out_offset=<bytes>] [poison|poison_writes]
@@ -119,6 +128,8 @@ struct Request {
   std::vector<std::size_t> scale_shape;
   std::size_t scale_cap = 0;
   bool has_scale_cap = false;
+  std::size_t out_cap = 0;
+  bool has_out_cap = false;
   std::size_t input_count = 0;
   bool has_input_count = false;
   std::vector<std::size_t> trace_shape;
@@ -157,6 +168,8 @@ struct Request {
 
 constexpr std::string_view kLinearBuffers[] = {"input", "w", "sb", "a", "sa", "out"};
 constexpr std::string_view kComputeInputs[] = {"a", "w", "sa", "sb"};
+constexpr std::string_view kFp8TraceBuffers[] = {"a", "w", "sa", "sb", "out", "products",
+    "partial_sums", "dot", "after_a", "block", "acc"};
 constexpr std::string_view kSwigluBuffers[] = {"gate", "up", "out", "gate_bits", "up_bits",
                                                "silu_bits", "gated_bits", "weighted_bits"};
 constexpr std::string_view kExpertBuffers[] = {
@@ -176,6 +189,10 @@ bool is_swiglu(const Request& req) {
 
 bool is_expert(const Request& req) {
   return req.op == "expert_bf16" || req.op == "expert_trace";
+}
+
+bool is_fp8_trace(const Request& req) {
+  return req.op == "fp8_grouped_dot_trace_fp32" || req.op == "fp8_grouped_dot_trace_bf16";
 }
 constexpr std::string_view kActBuffers[] = {"input", "a", "scale", "amax_bits",
     "bounded_amax_bits", "product_bits", "exponent", "quotient_bits", "clamped_bits"};
@@ -264,6 +281,10 @@ Request parse_request(std::string_view line) {
       if (req.has_scale_cap) die("duplicate scale_cap field");
       req.scale_cap = parse_number(field.substr(10), 10);
       req.has_scale_cap = true;
+    } else if (field.starts_with("out_cap=")) {
+      if (!is_fp8_trace(req) || req.has_out_cap) die("invalid or duplicate out_cap");
+      req.out_cap = parse_number(field.substr(8), 10);
+      req.has_out_cap = true;
     } else if (field.starts_with("work_shape=")) {
       if ((!is_expert(req) && req.op != "expert_storage") || req.has_work_shape)
         die("invalid or duplicate work_shape");
@@ -294,7 +315,8 @@ Request parse_request(std::string_view line) {
     } else if (field.starts_with("overlap=")) {
       if (req.has_overlap) die("duplicate overlap field");
       const auto name = field.substr(8);
-      if (is_linear(req) || is_swiglu(req) || is_expert(req) || req.op == "expert_storage") {
+      if (is_linear(req) || is_swiglu(req) || is_expert(req) || is_fp8_trace(req) ||
+          req.op == "expert_storage") {
         const auto comma = name.find(',');
         if (comma == std::string_view::npos) die("overlap needs two buffers");
         const auto index = [&](std::string_view value) {
@@ -313,6 +335,12 @@ Request parse_request(std::string_view line) {
                                         std::end(kExpertStorageBuffers), value);
             if (hit == std::end(kExpertStorageBuffers)) die("unknown expert storage buffer");
             return static_cast<std::size_t>(hit - std::begin(kExpertStorageBuffers));
+          }
+          if (is_fp8_trace(req)) {
+            const auto* hit = std::find(std::begin(kFp8TraceBuffers),
+                                        std::end(kFp8TraceBuffers), value);
+            if (hit == std::end(kFp8TraceBuffers)) die("unknown FP8 trace buffer");
+            return static_cast<std::size_t>(hit - std::begin(kFp8TraceBuffers));
           }
           const auto* hit = std::find(std::begin(kSwigluBuffers), std::end(kSwigluBuffers), value);
           if (hit == std::end(kSwigluBuffers)) die("unknown SwiGLU buffer");
@@ -339,7 +367,8 @@ Request parse_request(std::string_view line) {
     } else if (field.starts_with("trace_alias=")) {
       const bool activation = req.op == "act_quant_trace";
       const bool swiglu = req.op == "swiglu_trace";
-      if (!activation && !swiglu) die("trace_alias requires trace entry");
+      const bool fp8 = is_fp8_trace(req);
+      if (!activation && !swiglu && !fp8) die("trace_alias requires trace entry");
       if (req.has_trace_alias) die("duplicate trace_alias field");
       const auto pair = field.substr(12);
       const auto comma = pair.find(',');
@@ -350,13 +379,19 @@ Request parse_request(std::string_view line) {
           if (hit == std::end(kActBuffers)) die("unknown activation buffer");
           return static_cast<std::size_t>(hit - std::begin(kActBuffers));
         }
+        if (fp8) {
+          const auto* hit = std::find(std::begin(kFp8TraceBuffers),
+                                      std::end(kFp8TraceBuffers), buffer);
+          if (hit == std::end(kFp8TraceBuffers)) die("unknown FP8 trace buffer");
+          return static_cast<std::size_t>(hit - std::begin(kFp8TraceBuffers));
+        }
         const auto* hit = std::find(std::begin(kSwigluBuffers), std::end(kSwigluBuffers), buffer);
         if (hit == std::end(kSwigluBuffers)) die("unknown SwiGLU buffer");
         return static_cast<std::size_t>(hit - std::begin(kSwigluBuffers));
       };
       req.act_first = index(pair.substr(0, comma));
       req.act_second = index(pair.substr(comma + 1));
-      const std::size_t writable_start = activation ? 3 : 2;
+      const std::size_t writable_start = activation ? 3 : fp8 ? 4 : 2;
       if (req.act_first == req.act_second ||
           (req.act_first < writable_start && req.act_second < writable_start)) {
         die("trace_alias needs distinct buffers including a writable range");
@@ -666,7 +701,7 @@ ComputeInputs compute_inputs(const Request& req, std::uint8_t* shared) {
   return in;
 }
 
-void require_compute_fields(const Request& req) {
+void require_compute_fields(const Request& req, bool fp8 = false) {
   if (!req.has_cap) {
     die("request lacks cap=");
   }
@@ -676,7 +711,7 @@ void require_compute_fields(const Request& req) {
   if ((req.has_in_offset || req.has_out_offset) && !req.has_overlap) {
     die("in_offset= and out_offset= require overlap=");
   }
-  if (req.poison && req.has_overlap) {
+  if (req.poison && req.has_overlap && !fp8) {
     die("poison and overlap= are mutually exclusive");
   }
   require_sections(req, 4, "compute");
@@ -738,6 +773,62 @@ std::string run_compute(const Request& req) {
   return ok_response(out_ptr, req.cap);
 }
 
+std::size_t extent(std::size_t offset, std::size_t bytes);
+
+// P0028 public FP8 grouped dot with input snapshots and exact write-prefix checks.
+template <class Out>
+std::string run_fp8_compute(const Request& req, std::string_view fault) {
+  require_compute_fields(req, true);
+  if (req.has_trace_shape || req.has_trace_alias) die("ordinary FP8 dot carries trace fields");
+  const std::size_t out_bytes = buffer_bytes(req.cap, sizeof(Out));
+  if (req.out_offset % sizeof(Out) != 0) {
+    die("out_offset must be a multiple of the output element size");
+  }
+  std::size_t bytes = extent(req.out_offset, out_bytes);
+  if (req.has_overlap) bytes = std::max(bytes, extent(req.in_offset, req.sections[req.overlap].size()));
+  const auto raw = std::make_unique<std::uint8_t[]>(bytes);
+  std::memset(raw.get(), kFill, bytes);
+  const ComputeInputs in = compute_inputs(req, raw.get());
+  Out* const out_ptr = reinterpret_cast<Out*>(raw.get() + req.out_offset);
+  std::vector<std::vector<unsigned char>> input_before(4);
+  for (std::size_t i = 0; i < 4; ++i) {
+    input_before[i].assign(in.views[i].begin(), in.views[i].end());
+  }
+  const std::vector<unsigned char> before(raw.get(), raw.get() + bytes);
+  if (req.poison) set_poison(in, true);
+  const int outcome = call_guarded([&] {
+    q::fp8_grouped_dot(in.views[0], in.views[1], in.views[2], in.views[3],
+                       std::span<Out>(out_ptr, req.cap));
+  });
+  if (req.poison) {
+    set_poison(in, false);
+#if defined(__SANITIZE_ADDRESS__)
+    ASAN_UNPOISON_MEMORY_REGION(raw.get(), bytes);
+#endif
+  }
+  if (outcome != kOk) {
+    if (fault == "reject-input-write" && !in.views[0].empty())
+      const_cast<std::uint8_t*>(in.views[0].data())[0] ^= 1;
+    bool changed = buffer_changed(before.data(), raw.get(), bytes);
+    for (std::size_t i = 0; i < 4; ++i)
+      changed |= !std::equal(input_before[i].begin(), input_before[i].end(), in.views[i].begin());
+    return err_response(outcome, changed);
+  }
+  if (fault == "input-write" && !in.views[0].empty()) {
+    const_cast<std::uint8_t*>(in.views[0].data())[0] ^= 1;
+  }
+  for (std::size_t i = 0; i < 4; ++i) {
+    if (!std::equal(input_before[i].begin(), input_before[i].end(), in.views[i].begin()))
+      die("FP8 dot input changed on success");
+  }
+  const std::size_t written = req.cap == 0 ? 0 : sizeof(Out);
+  for (std::size_t i = 0; i < bytes; ++i) {
+    const bool output_byte = i >= req.out_offset && i - req.out_offset < written;
+    if (!output_byte && raw[i] != before[i]) die("FP8 dot bytes outside write range changed on success");
+  }
+  return ok_response(out_ptr, req.cap);
+}
+
 // Private trace connection: one contiguous response buffer carved into the stage spans.
 std::string run_trace(const Request& req) {
   require_compute_fields(req);
@@ -777,6 +868,141 @@ std::string run_trace(const Request& req) {
     return err_response(outcome, buffer_changed(before.data(), out.get(), out_bytes));
   }
   return ok_response(out.get(), req.cap);
+}
+
+// P0028 trace responses are uint32 words: six stage spans followed by the full output buffer.
+template <class Out>
+std::string run_fp8_trace(const Request& req, std::string_view fault) {
+  if (!req.has_cap || req.has_shape || req.has_scale_shape || req.alias || req.scale_alias ||
+      req.has_overlap || req.trace_object_alias || req.has_scale_cap || req.has_a_cap ||
+      req.workspace || req.poison_writes || req.runtime_failure || req.has_route ||
+      req.has_input_count || req.has_work_shape) {
+    die("FP8 trace requires cap= and optional trace_shape=, trace_alias=, offsets or poison");
+  }
+  if ((req.has_in_offset || req.has_out_offset) && !req.has_trace_alias)
+    die("FP8 trace offsets require trace_alias=");
+  require_sections(req, 4, "FP8 trace");
+  const std::size_t k = req.sections[0].size();
+  const std::size_t groups = k / 32;
+  const std::vector<std::size_t> shape = req.has_trace_shape
+      ? req.trace_shape : std::vector<std::size_t>{k, k, groups, groups, groups, groups};
+  if (shape.size() != 6) die("FP8 trace_shape requires six lengths");
+  const std::size_t out_cap = req.has_out_cap ? req.out_cap : 1;
+  if (req.cap != shape[0] + shape[1] + shape[2] + shape[3] + shape[4] + shape[5] + out_cap)
+    die("FP8 trace cap must equal trace elements plus out_cap");
+  const std::size_t sizes[] = {req.sections[0].size(), req.sections[1].size(),
+      req.sections[2].size(), req.sections[3].size(), buffer_bytes(out_cap, sizeof(Out)),
+      buffer_bytes(shape[0], 4), buffer_bytes(shape[1], 4), buffer_bytes(shape[2], 4),
+      buffer_bytes(shape[3], 4), buffer_bytes(shape[4], 4), buffer_bytes(shape[5], 4)};
+  const std::size_t alignments[] = {1, 1, 1, 1, sizeof(Out), 4, 4, 4, 4, 4, 4};
+  std::unique_ptr<std::uint8_t[]> byte_owners[11];
+  std::unique_ptr<std::uint16_t[]> half_owners[11];
+  std::unique_ptr<std::uint32_t[]> word_owners[11];
+  std::unique_ptr<std::uint64_t[]> shared_owner;
+  unsigned char* buffers[11] = {};
+  unsigned char* shared = nullptr;
+  std::size_t shared_size = 0;
+  if (req.has_trace_alias) {
+    for (const auto& [index, offset] : {std::pair{req.act_first, req.in_offset},
+                                       std::pair{req.act_second, req.out_offset}}) {
+      if (index >= 11 || offset % alignments[index]) die("unaligned FP8 trace alias offset");
+      shared_size = std::max(shared_size, extent(offset, sizes[index]));
+    }
+    shared_owner = std::make_unique<std::uint64_t[]>(shared_size / 8 + (shared_size % 8 != 0));
+    shared = reinterpret_cast<unsigned char*>(shared_owner.get());
+    std::memset(shared, kFill, shared_size);
+    buffers[req.act_first] = shared + req.in_offset;
+    buffers[req.act_second] = shared + req.out_offset;
+  }
+  for (std::size_t i = 0; i < 11; ++i) {
+    if (buffers[i]) continue;
+    if (alignments[i] == 1) {
+      byte_owners[i] = std::make_unique<std::uint8_t[]>(sizes[i]);
+      buffers[i] = byte_owners[i].get();
+    } else if (alignments[i] == 2) {
+      half_owners[i] = std::make_unique<std::uint16_t[]>(sizes[i] / 2);
+      buffers[i] = reinterpret_cast<unsigned char*>(half_owners[i].get());
+    } else {
+      word_owners[i] = std::make_unique<std::uint32_t[]>(sizes[i] / 4);
+      buffers[i] = reinterpret_cast<unsigned char*>(word_owners[i].get());
+    }
+    std::memset(buffers[i], kFill, sizes[i]);
+  }
+  for (std::size_t section = 0; section < 4; ++section) {
+    for (std::size_t i = 0; i < req.sections[section].size(); ++i)
+      buffers[section][i] = narrow_token<std::uint8_t>(req.sections[section][i]);
+  }
+  std::vector<std::vector<unsigned char>> before(11);
+  for (std::size_t i = 0; i < 11; ++i) before[i].assign(buffers[i], buffers[i] + sizes[i]);
+  std::vector<unsigned char> before_shared;
+  if (shared) before_shared.assign(shared, shared + shared_size);
+  const std::span<const std::uint8_t> inputs[] = {
+      {buffers[0], req.sections[0].size()}, {buffers[1], req.sections[1].size()},
+      {buffers[2], req.sections[2].size()}, {buffers[3], req.sections[3].size()}};
+  q::detail::DotTrace trace{{reinterpret_cast<std::uint32_t*>(buffers[5]), shape[0]},
+      {reinterpret_cast<std::uint32_t*>(buffers[6]), shape[1]},
+      {reinterpret_cast<std::uint32_t*>(buffers[7]), shape[2]},
+      {reinterpret_cast<std::uint32_t*>(buffers[8]), shape[3]},
+      {reinterpret_cast<std::uint32_t*>(buffers[9]), shape[4]},
+      {reinterpret_cast<std::uint32_t*>(buffers[10]), shape[5]}};
+#if defined(__SANITIZE_ADDRESS__)
+  if (req.poison) for (std::size_t i = 0; i < 4; ++i) ASAN_POISON_MEMORY_REGION(buffers[i], sizes[i]);
+#endif
+  const int outcome = call_guarded([&] {
+    q::detail::trace_fp8_grouped_dot(inputs[0], inputs[1], inputs[2], inputs[3],
+        std::span<Out>(reinterpret_cast<Out*>(buffers[4]), out_cap), trace);
+  });
+#if defined(__SANITIZE_ADDRESS__)
+  if (req.poison) for (std::size_t i = 0; i < 4; ++i) ASAN_UNPOISON_MEMORY_REGION(buffers[i], sizes[i]);
+  if (shared) ASAN_UNPOISON_MEMORY_REGION(shared, shared_size);
+#endif
+  if (outcome != kOk) {
+    if (fault == "reject-input-write" && sizes[0]) buffers[0][0] ^= 1;
+    bool changed = shared && buffer_changed(before_shared.data(), shared, shared_size);
+    for (std::size_t i = 0; i < 11; ++i) {
+      if (shared && (i == req.act_first || i == req.act_second)) continue;
+      changed |= buffer_changed(before[i].data(), buffers[i], sizes[i]);
+    }
+    return err_response(outcome, changed);
+  }
+  if (fault == "input-write" && sizes[0]) buffers[0][0] ^= 1;
+  for (std::size_t i = 0; i < 4; ++i)
+    if (buffer_changed(before[i].data(), buffers[i], sizes[i])) die("FP8 trace input changed on success");
+  const std::size_t used[] = {0, 0, 0, 0, sizeof(Out), sizes[5], sizes[6], sizes[7],
+                              sizes[8], sizes[9], sizes[10]};
+  for (std::size_t i = 4; i < 11; ++i) {
+    if (shared && (i == req.act_first || i == req.act_second)) continue;
+    if (buffer_changed(before[i].data() + std::min(used[i], sizes[i]),
+                       buffers[i] + std::min(used[i], sizes[i]),
+                       sizes[i] - std::min(used[i], sizes[i])))
+      die("FP8 trace bytes outside write ranges changed on success");
+  }
+  if (shared) {
+    for (std::size_t offset = 0; offset < shared_size; ++offset) {
+      bool writable = false;
+      for (const std::size_t index : {req.act_first, req.act_second}) {
+        if (index < 4) continue;
+        const std::size_t start = static_cast<std::size_t>(buffers[index] - shared);
+        writable |= offset >= start && offset - start < std::min(used[index], sizes[index]);
+      }
+      if (!writable && shared[offset] != before_shared[offset])
+        die("FP8 trace bytes outside write ranges changed on success");
+    }
+  }
+  std::string response = "ok";
+  for (std::size_t index = 5; index < 11; ++index) {
+    for (std::size_t offset = 0; offset < sizes[index]; offset += 4) {
+      std::uint32_t value = 0;
+      std::memcpy(&value, buffers[index] + offset, 4);
+      append_hex(response, value);
+    }
+  }
+  for (std::size_t i = 0; i < out_cap; ++i) {
+    Out value = 0;
+    std::memcpy(&value, buffers[4] + i * sizeof(Out), sizeof(Out));
+    append_hex(response, static_cast<std::uint32_t>(value));
+  }
+  return response;
 }
 
 // Private probes of production FP32 helpers; every bit pattern is a valid operand.
@@ -1191,7 +1417,7 @@ std::string run_swiglu_counts(const Request& req, bool traced) {
 // P0017 composition exists only here: production activation buffers are passed
 // directly to the production grouped dot, without a driver round-trip or public API.
 template <class Out>
-std::string run_act_combination(const Request& req) {
+std::string run_act_combination(const Request& req, bool fp8) {
   if (!req.has_cap || req.has_scale_cap || req.has_trace_shape || req.has_shape ||
       req.has_scale_shape || req.alias || req.scale_alias || has_compute_fields(req)) {
     die("activation combination takes only cap=");
@@ -1212,8 +1438,13 @@ std::string run_act_combination(const Request& req) {
                                          reinterpret_cast<unsigned char*>(out.get()) + bytes);
   const int outcome = call_guarded([&] {
     q::act_quant({input.get(), k}, {a.get(), k}, {scale.get(), k / 32});
-    q::expert_grouped_dot({a.get(), k}, in.views[1], {scale.get(), k / 32}, in.views[3],
-                          std::span<Out>(out.get(), req.cap));
+    if (fp8) {
+      q::fp8_grouped_dot({a.get(), k}, in.views[1], {scale.get(), k / 32}, in.views[3],
+                         std::span<Out>(out.get(), req.cap));
+    } else {
+      q::expert_grouped_dot({a.get(), k}, in.views[1], {scale.get(), k / 32}, in.views[3],
+                            std::span<Out>(out.get(), req.cap));
+    }
   });
   if (outcome != kOk) return err_response(outcome, buffer_changed(before.data(), out.get(), bytes));
   return ok_response(out.get(), req.cap);
@@ -1710,6 +1941,7 @@ std::string dispatch(const Request& req, std::string_view fault) {
   using u16 = std::uint16_t;
   using u32 = std::uint32_t;
   using i8 = std::int8_t;
+  if (req.has_out_cap && !is_fp8_trace(req)) die("out_cap field on another request family");
   if (req.op == "expert_bf16" || req.op == "expert_trace") return run_expert(req, fault);
   if (req.op == "expert_counts") return run_expert_counts(req, false);
   if (req.op == "expert_counts_trace") return run_expert_counts(req, true);
@@ -1723,9 +1955,12 @@ std::string dispatch(const Request& req, std::string_view fault) {
   if (req.op == "swiglu_counts_trace") return run_swiglu_counts(req, true);
   if (req.has_route) die("route field on another request family");
   if (req.op == "act_quant" || req.op == "act_quant_trace") return run_act_quant(req, fault);
-  if (req.op == "act_quant_dot_fp32") return run_act_combination<u32>(req);
-  if (req.op == "act_quant_dot_bf16") return run_act_combination<u16>(req);
-  if (req.has_scale_cap || req.has_trace_shape) die("activation fields on another request family");
+  if (req.op == "act_quant_dot_fp32") return run_act_combination<u32>(req, false);
+  if (req.op == "act_quant_dot_bf16") return run_act_combination<u16>(req, false);
+  if (req.op == "act_quant_fp8_dot_fp32") return run_act_combination<u32>(req, true);
+  if (req.op == "act_quant_fp8_dot_bf16") return run_act_combination<u16>(req, true);
+  if ((req.has_scale_cap || req.has_trace_shape) && !is_fp8_trace(req))
+    die("activation fields on another request family");
   if (req.op == "asan") {
     const std::uint32_t value = kAsan ? 1 : 0;
     return ok_response(&value, 1);
@@ -1753,6 +1988,10 @@ std::string dispatch(const Request& req, std::string_view fault) {
   if (req.op == "expert_grouped_dot_fp32") return run_compute<u32>(req);
   if (req.op == "expert_grouped_dot_bf16") return run_compute<u16>(req);
   if (req.op == "expert_grouped_dot_trace") return run_trace(req);
+  if (req.op == "fp8_grouped_dot_fp32") return run_fp8_compute<u32>(req, fault);
+  if (req.op == "fp8_grouped_dot_bf16") return run_fp8_compute<u16>(req, fault);
+  if (req.op == "fp8_grouped_dot_trace_fp32") return run_fp8_trace<u32>(req, fault);
+  if (req.op == "fp8_grouped_dot_trace_bf16") return run_fp8_trace<u16>(req, fault);
   for (const auto& entry : kDequantOps) {
     if (!req.op.starts_with(entry.base)) {
       continue;
