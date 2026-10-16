@@ -1,6 +1,6 @@
 # COMPUTE.md — 专家分组点积与线性层 CPU 契约
 
-本页定义官方 FP8×FP4 路径阶段约束下的单输出 CPU 规范及复用它的完整线性层契约，不宣称官方 GPU 逐位等价。选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)，实施与验收见 [P0012](../plan/p0012-expert-grouped-dot-oracle.md)，验证链见 [MODEL §4](MODEL.md#4-精确性链条)。模型事实只引用 MODEL，格式与既有舍入只引用 [QUANT](QUANT.md)。
+本页定义官方 FP8×FP4 路径阶段约束下的单输出 CPU 规范及复用它的完整线性层契约，不宣称官方 GPU 逐位等价。选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)，实施与验收见 [P0012](../plan/p0012-expert-grouped-dot-oracle.md)，验证链见 [MODEL §4](MODEL.md#4-精确性链条)。模型事实只引用 MODEL，格式与既有舍入只引用 [QUANT](QUANT.md)。FP8×FP8 的独立单输出契约见 §8，选择理由见 D0021。
 
 ## 1. 来源与参照边界
 
@@ -76,3 +76,52 @@ bf16_result = RNE_BF16(fp32_result)
 - **别名与拒绝**：三个实际写入前缀互不重叠，并与所有输入的实际读取区间不重叠；只读输入之间允许重叠，未使用尾部不参与判定，精确相邻允许。维度、尺寸及字节计数溢出、长度、容量与别名检查先于内容读取；全矩阵 scale_b 的 `0xFF` 编码及非有限 BF16 输入均在任何写入前拒绝。所有约定参数错误抛 `std::invalid_argument`，输出与两份工作缓冲全部不变，即使错误位于最后一行。合法结果中的 Inf/NaN 不算拒绝。[D0014]
 - **组合与环境**：调用一次生产 act_quant，将其实际输出缓冲供全部行的生产 expert_grouped_dot 直接消费；FP32/BF16 重载不改变中间计算。沿用整数数值路径，不读取或修改调用方浮点环境。不提供整矩阵 trace 或新的舍入、归约路线。[D0014]
 - **验证路由**：上一级与覆盖边界见 [MODEL §4](MODEL.md#4-精确性链条)，测试及离线工具见 [BUILD §7](BUILD.md#7-测试清单)，验收方法与证据见 P0019。[D0014]
+
+## 8. FP8 块缩放单输出点积
+
+本节是 [D0021](../plan/decisions/d0021-fp8-grouped-dot-reference.md) 接受的独立契约，实施验收见 [P0027](../plan/p0027-fp8-grouped-dot-oracle.md)。数值为格式或算法约束，不是性能测量；环境名称只引用 [BUILD §1](BUILD.md#1-支持环境)。本节 **[代码]** 指官方只读镜像，**[格式]** 指 QUANT，**[D0021]** 指项目 CPU 选择，不将其视为 D0008 已验收范围。
+
+### 8.1 来源与选择
+
+- `model.py:27–30,196–205` 将 FP8 激活量化及 FP8 GEMM 的 K 分组均设为 32；`model.py:225–233` 的权重为 E4M3FN `[N,K]`，E8M0 scale 为 `[ceil(N/32),ceil(K/32)]`，与 FP4 的逐输出行 scale 不同。[代码][格式]
+- `kernel.py:227–270,277–307` 给出 E4M3FN×E4M3FN 块内 GEMM、先激活 scale 后权重 scale、FP32 跨块累加及输出转换，入口要求 K 整除分组大小。权重行 n 的第 j 个 K 块使用 `scale_b[n//32,j]`；模型默认输出 dtype 为 BF16。[代码]
+- 源码不能确定 `T.gemm` 内部归约及有效精度、编译后的融合/重排、设备 cast/FTZ。本节选择顺序 FP32 RNE、无融合及渐进下溢，建立可独立核验的 CPU 规范，不据此推断 GPU 逐位等价。[D0021]
+
+### 8.2 输入与失败
+
+入口 `ref/fp8_compute.py::fp8_grouped_dot(a_codes, w_codes, scale_a, scale_b, *, output="fp32")` 仅消费四份一维编码序列，计算一个输出；`trace_fp8_grouped_dot` 使用同一输入契约。[D0021]
+
+- 激活与权重均为 E4M3FN 原始字节编码，长度同为 K，K 为正且整除 32。两份 E8M0 scale 长度严格为 K/32，第 j 块分别消费 `scale_a[j]` 和 `scale_b[j]`。不打包 nibble，不广播、不补齐、不生成 scale，不接收矩阵或 stride。[代码][格式][D0021]
+- 接受 `collections.abc.Sequence` 的一维序列；`memoryview` 须为一维。元素只接受 `0..255` 的 Python int，拒绝 bool、浮点和负的 int8 表示。激活及权重各自的 NaN 编码 `0x7F/0xFF`、任一 scale 的 NaN 编码 `0xFF` 均拒绝；其余 E4M3FN 编码含正负零均合法，有限 E8M0 为严格正的幂。[格式][D0021]
+- `output` 仅为 `"fp32"` 或 `"bf16"`，默认前者；分别返回精确承载 binary32 的 Python float 或 BF16 原始整数位，模式不改变中间计算。[D0021]
+- 非序列、非一维 memoryview 或非整数元素抛 `TypeError`；非法模式、长度/分组、越界编码与 NaN 输入抛 `ValueError`。先验证元数据，再取得并验证全部编码快照，最后计算；不改输入，失败不返回部分结果，不宣称官方入口有相同拒绝政策。[D0021]
+- 多行权重只在测试侧抽取连续行及对应二维 scale 行后调用上述单输出入口；输出行尾块使用实际行数，不引入 K 补齐。[代码][D0021]
+
+### 8.3 执行与观测
+
+以下是新的完整执行链，不调用 FP8×FP4 点积。`R32`、逐步 FP32 RNE、加法/乘法的零符号、渐进下溢、Inf/NaN 传播及最终 BF16 转换政策，明确共用本页 §3 的算术定义；其中 FP4 解码和 packed 布局不适用于本节。[格式][D0021]
+
+```text
+acc = +0
+for j in ascending K-block order:
+    dot = +0
+    for r in 0..31:
+        i = 32*j + r
+        p = R32(decode_e4m3fn(a_codes[i]) * decode_e4m3fn(w_codes[i]))
+        dot = R32(dot + p)
+    after_a = R32(dot * decode_e8m0(scale_a[j]))
+    block = R32(after_a * decode_e8m0(scale_b[j]))
+    acc = R32(acc + block)
+fp32_result = acc
+bf16_result = RNE_BF16(fp32_result)
+```
+
+每个乘积、每次加法和两次 scale 应用分别落到 FP32，不移动、交换或合并 scale，不树形归约、不以精确求和替代逐步归约、不融合乘加、不提前 BF16。[D0021] 合法有限编码产生的中间及最终 Inf/NaN 是计算结果，不作为输入拒绝；有限值、零和 Inf 按位比较，NaN 只按分类比较，payload 与符号不作承诺。[D0021]
+
+普通与 trace 共用执行核心。观测包含每块的 32 个乘积位、32 个块内部分和位、块内点积位、两次 scale 后位和跨块累加位，以及最终 FP32/BF16 位和所选模式的正式结果。独立期望使用标准库精确算术与格点 RNE，不调用被测解码、计算或舍入 helper；最终输出相同不能替代阶段一致。[D0021]
+
+### 8.4 环境与验证路由
+
+数值运算不依赖宿主浮点加乘、环境舍入或 DAZ/FTZ，不读取或修改调用方浮点环境。只依赖 Python 标准库，支持声明限 ENV-A；普通与 trace 的成功及拒绝调用均要求完整 MXCSR 不变，阶段位及正式输出在 [BUILD §7](BUILD.md#7-测试清单) 的八模式与状态位清空/预置下核对。[D0021]
+
+数值阶段以整数位域执行，复用既有 binary32 构造、有限值拆分及 BF16 位转换；FP8 乘积、加法与 scale 应用仅作本计算链私有构件，最终 FP32 结果才构造精确 binary64 载体。不经值级 `fp32_bits` 或 `as_integer_ratio` 往返，不修改旧 oracle 的语义，不因复用而免除本节完整执行链的独立验证。既有 [ACTQUANT](ACTQUANT.md) 的实际编码与 scale 可直接作为输入，组合只在测试侧存在。覆盖矩阵见 [MODEL §4](MODEL.md#4-精确性链条)，增量复现入口见 [BUILD §7](BUILD.md#7-测试清单)。[D0021]
