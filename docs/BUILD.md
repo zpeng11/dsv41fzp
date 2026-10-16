@@ -99,6 +99,7 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `core.moe.consumer` | 复用公共消费者的 `--moe-only`：生产 routed 单次调用、无动态数值存储、跨组件预检与失败原子性 |
 | `core.moe.parity` / `core.moe.harness` | `tests/core/test_moe_scalar.py`：生产普通/私有观测对照 routed 参照，逐步部分和、尾部及协议/故障检出 |
 | `quant.compute` | `tests/quant/test_compute.py`：专家 FP8×packed FP4 单输出计算参照的独立逐阶段期望、输入契约、临时副本敏感性与失败传播 |
+| `quant.fp8_compute` | `tests/quant/test_fp8_compute.py`：FP8×FP8 单输出点积的独立阶段期望、二维 scale 选行及激活量化组合、输入/环境与定向错误检出；契约见 [COMPUTE §8](COMPUTE.md#8-fp8-块缩放单输出点积) |
 | `quant.act_quant` | `tests/quant/test_act_quant.py`：BF16 动态激活量化参照的独立逐阶段期望、有限码点穷举、布局与计算组合、临时副本敏感性与失败传播 |
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
 | `quant.codec.contract` | 每类输入拒绝、失败时输出不变、格式契约版本 |
@@ -151,6 +152,8 @@ ctest --test-dir <repo>/build/cpu-debug -R '^core\.router(\.expert)?$' --output-
 ```
 
 Release 换对应目录。上述参照接口测试复用 `df_quant_exec`，只执行所选专家，不聚合输出；P0024 的生产路由使用独立 `df_core_exec`，不改变原命令语义。[代码]
+
+P0027 FP8 点积新增验收从任意目录执行 `PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/quant/test_fp8_compute.py`。配置 Debug/Release 后用 `ctest --test-dir <repo>/build/cpu-debug -R '^quant\.fp8_compute$' --output-on-failure --no-tests=error`（Release 换对应目录），无需 C++ build；只收集该新增套件，旧测试模块仅提供独立期望构件。仅依赖标准库，不需要权重、GPU 或网络，错误、异常、skip 与缺依赖均非零退出；环境探针要求 ENV-A，调用窗口内仅采集环境，恢复后核对阶段与结果。临时源码变体和测试侧错映射检出不改工作树，分类证据归 P0027；两种 sanitizer scope 不新增本套件。[代码]
 
 P0025 routed 分支参照仅依赖标准库，不需要 C++ 执行器、权重或网络。从任意目录执行 `PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/core/test_moe.py`；配置 Debug/Release 后可用 `ctest --test-dir <repo>/build/cpu-debug -R '^core\.moe$' --output-on-failure --no-tests=error`（Release 换对应目录），无需 build。只采集新增测试，导入旧模块仅复用期望与构造，不重跑旧验收；非 ENV-A、异常、错误或 skip 均失败，不扩大两种 sanitizer scope。数值及环境边界只见 [MOE](MOE.md)。[代码]
 
@@ -224,7 +227,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/quant/expert_sensitivity.py
 
 `tools.ckpt_expert`、`tools.ckpt_linear` 与 `tools.ckpt_expert_mlp` 只在 CPU Debug/Release 注册，使用临时合成文件与当前构建的执行器；不扩大 quant 专用 sanitizer 范围。源码目录外运行上述入口时，脚本、快照、执行器和报告目标均使用绝对路径。[代码]
 
-`quant.compute`、`quant.act_quant` 与 `quant.expert` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。生产 `quant.swiglu.*` 位于 quant 子树，进入三种 CPU preset；全域 gate 穷举仅在 parity 的默认 MXCSR 子步骤执行一次。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
+`quant.compute`、`quant.fp8_compute`、`quant.act_quant` 与 `quant.expert` 注册在 quant 专用 scope 返回之后，只进入全量 CPU Debug/Release，不扩大 sanitizer 范围。生产 `quant.swiglu.*` 位于 quant 子树，进入三种 CPU preset；全域 gate 穷举仅在 parity 的默认 MXCSR 子步骤执行一次。`quant.act_quant` 的浮点环境探针用标准库 `ctypes` 调用 glibc `fegetenv`/`fesetenv`，按 Linux x86_64 的 `fenv_t` 布局设置并核对 MXCSR；该主机探针不宣称支持其他平台，不 skip 或要求临时编译辅助库。[代码]
 
 `cpu-asan` 只注册 `quant.codec.*`、`quant.dequant.*`、`quant.compute.{parity,contract,add,harness}`、`quant.act_quant.{parity,contract,combination,harness}`、`quant.linear.{parity,contract,harness,consumer}`、`quant.swiglu.{parity,contract,harness,consumer}`、`quant.expert.{parity,contract,harness,consumer}` 与 `quant.compile_flags`（验证 df_quant、df_quant_exec 及 linear/swiglu/expert 三个 consumer 均带 sanitizer 选项）；Python oracle 的 `quant.compute` 与 `quant.act_quant` 不在其中。经协议调用的 quant 套件通过 `$<TARGET_FILE:df_quant_exec>` 定位执行器，非共享缓冲区按精确长度分配，使越界访问对 ASan 可见；私有乘法、加法、SwiGLU 计数与逐阶段观测探针直接调用库中同一 helper 或计算核心，不将其加入公共 API。该执行器以十六进制逐行承载 shape 与各份原始编码，只是测试连接，不是生产序列化或 pack 格式。[代码][实测]
 

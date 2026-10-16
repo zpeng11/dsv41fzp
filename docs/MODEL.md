@@ -225,11 +225,12 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡][ckpt]；分解：专家 FP4 296
        │    └─ src/quant/ C++ scalar 激活量化 → 同契约激活量化 kernel parity
        ├─ 官方 FP8×FP4 阶段约束下的 CPU 规范：COMPUTE → Python 计算参照
        │    └─ src/quant/ C++ scalar 专家分组点积 → 同契约计算 kernel parity
+       ├─ 官方 FP8×FP8 阶段约束下的 CPU 规范：COMPUTE §8 → Python 单输出点积参照
        ├─ K-E1 W4A16：BF16 激活、权重反量化落点及累加规则一致的计算参照
        └─ K-E2 W4A8-int8：整数改写计算参照与相对官方路径的独立验证
 ```
 
-格式与逐元素反量化契约见 [QUANT](QUANT.md)；BF16 动态激活量化 CPU 规范见 [ACTQUANT](ACTQUANT.md)，选择理由见 [D0010](../plan/decisions/d0010-act-quant-reference.md)，其输出可直接供给计算参照。官方 FP8×FP4 阶段约束下的 CPU 规范见 [COMPUTE](COMPUTE.md)，选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)。每段快代码只对照上一级已验证的同契约 scalar；格式正确不证明归约、移动 scale、提前 BF16 或整数改写等价。官方 GPU 的归约、融合及 cast/FTZ 须设备仲裁，不能由 CPU 契约推定。
+格式与逐元素反量化契约见 [QUANT](QUANT.md)；BF16 动态激活量化 CPU 规范见 [ACTQUANT](ACTQUANT.md)，选择理由见 [D0010](../plan/decisions/d0010-act-quant-reference.md)，其输出可直接供给计算参照。官方 FP8×FP4 阶段约束下的 CPU 规范见 [COMPUTE](COMPUTE.md)，选择理由见 [D0008](../plan/decisions/d0008-expert-grouped-dot-reference.md)；FP8×FP8 的独立单输出契约见 [COMPUTE §8](COMPUTE.md#8-fp8-块缩放单输出点积)，选择理由见 [D0021](../plan/decisions/d0021-fp8-grouped-dot-reference.md)。每段快代码只对照上一级已验证的同契约 scalar；格式正确不证明归约、移动 scale、提前 BF16 或整数改写等价。官方 GPU 的归约、融合及 cast/FTZ 须设备仲裁，不能由 CPU 契约推定。
 
 **验证链覆盖矩阵**（契约与上一级路由的唯一边界来源；各契约页只链接本表，验收状态仍以对应 P 条目为准）：
 
@@ -240,6 +241,7 @@ checkpoint 总量 **510.29 GB / 48 shard** [卡][ckpt]；分解：专家 FP4 296
 | `df_quant` codec | [QUANT §6](QUANT.md#6-生产-c-codecsrcquant) | 同契约格式 kernel；覆盖 K-Q1 与 K-Q3 的 E4M3FN/BF16 解码和 FP32→BF16 | 乘 scale（由下一行验收）、BF16→E4M3 编码、点积 scale 折叠 |
 | `df_quant` 反量化 | [QUANT §7](QUANT.md#7-给定-scale-的生产-scalar-反量化) | 逐元素 dequant 类 kernel | 同 `ref/dequant.py` 行；不笼统表示 K-Q1～K-Q3 全部完成 |
 | `ref/compute.py` | [COMPUTE §1～§4](COMPUTE.md#1-来源与参照边界) | 生产专家分组点积 | 逐元素 dequant 的后继、K-E1 W4A16、K-E2 整数改写、scale 生成 |
+| `ref/fp8_compute.py` | [COMPUTE §8](COMPUTE.md#8-fp8-块缩放单输出点积)，独立 FP8×FP8 单输出 CPU 规范；证据归 [P0027](../plan/p0027-fp8-grouped-dot-oracle.md) | 同契约生产 FP8 块缩放单输出 scalar | FP8×FP4 计算或逐元素 dequant 的后继、完整 FP8 线性层/共享专家/完整 MoE、矩阵 API、scale 生成、真实 checkpoint 消费及生产加载器；测试侧二维选行与量化组合不替代上述验收 |
 | `df_quant` 专家分组点积 | [COMPUTE §6](COMPUTE.md#6-生产-c-scalarsrcquant) | 同契约计算快路径 | 同 `ref/compute.py` 行 |
 | `ref/act_quant.py` | [ACTQUANT](ACTQUANT.md) | 同契约生产激活量化 scalar | K-X1 kernel（须经生产 scalar）、inplace/KV 量化、`fp4_act_quant`、权重量化、K-E1/K-E2、完整专家 MLP |
 | `df_quant` 单行激活量化 | [ACTQUANT §7](ACTQUANT.md#7-生产-c-scalarsrcquant) | 同契约激活量化快路径 | 上一行除 K-X1 kernel 外的边界同样适用；单行入口不单独验收完整线性层 |
