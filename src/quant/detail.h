@@ -99,6 +99,12 @@ ExpertCounts check_expert_counts(std::size_t input_count, std::size_t w1_n, std:
 void check_expert_storage(std::span<const std::span<const std::byte>> reads,
                           std::span<const std::span<std::byte>> scratch_writes,
                           std::span<std::byte> out, std::size_t out_write_bytes);
+ExpertCounts validate_expert_parameters(std::span<const std::uint16_t> input, ExpertMatrix w1,
+                                        ExpertMatrix w2, ExpertMatrix w3,
+                                        ExpertWorkspace work, std::span<std::uint16_t> out);
+void validate_expert_contents(std::span<const std::uint16_t> input, ExpertMatrix w1,
+                              ExpertMatrix w2, ExpertMatrix w3, bool weighted,
+                              std::uint32_t route_weight_bits);
 
 void trace_expert(std::span<const std::uint16_t> input, ExpertMatrix w1, ExpertMatrix w2,
                   ExpertMatrix w3, ExpertWorkspace work, std::span<std::uint16_t> out,

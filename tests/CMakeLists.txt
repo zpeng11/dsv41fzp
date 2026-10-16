@@ -1,4 +1,4 @@
-# Unified CTest entry (P0009–P0025): build baseline, quant and core suites.
+# Unified CTest entry (P0009–P0026): build baseline, quant and core suites.
 # Sanitizer scopes register only their selected subtree and compile-flag check.
 
 function(df_add_python_test name script)

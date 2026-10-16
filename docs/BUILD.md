@@ -96,6 +96,8 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `core.router.contract` / `core.router.harness` | 同驱动检查预检、容量、别名、失败原子性与认证耗尽，以及执行器/响应故障和 ASan 加毒有效性 |
 | `core.router.consumer` / `core.compile_flags` | 公共头独立 C++ 调用、手写结果及成功路径无动态数值存储；按当前 scope 核对 target 编译选项 |
 | `core.router.combination` | 生产路由实际编号/权重进入既有专家执行器，核对专家普通/观测结果及错接线数值反例；不聚合 |
+| `core.moe.consumer` | 复用公共消费者的 `--moe-only`：生产 routed 单次调用、无动态数值存储、跨组件预检与失败原子性 |
+| `core.moe.parity` / `core.moe.harness` | `tests/core/test_moe_scalar.py`：生产普通/私有观测对照 routed 参照，逐步部分和、尾部及协议/故障检出 |
 | `quant.compute` | `tests/quant/test_compute.py`：专家 FP8×packed FP4 单输出计算参照的独立逐阶段期望、输入契约、临时副本敏感性与失败传播 |
 | `quant.act_quant` | `tests/quant/test_act_quant.py`：BF16 动态激活量化参照的独立逐阶段期望、有限码点穷举、布局与计算组合、临时副本敏感性与失败传播 |
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
@@ -164,7 +166,9 @@ ctest --preset cpu-asan-core --output-on-failure --no-tests=error
 PYTHONDONTWRITEBYTECODE=1 python3 tests/core/router_sensitivity.py
 ```
 
-Release 换 `cpu-release`。`test_router_parity.py --exe <df_core_exec> --suite parity|contract|harness` 可单跑；`--suite combination` 另须 `--expert-exe <df_quant_exec>`。独立 core 执行器只承载路由/私有算术与存储探针，不复制专家协议；组合复用既有专家执行器。敏感性脚本仅在临时源码副本编译变体，独立运行、不进入 CTest、不修改工作树或冻结数据。契约见 [ROUTER §6](ROUTER.md#6-生产-cpu-scalar)，证据归 P0024。[代码]
+Release 换 `cpu-release`。`test_router_parity.py --exe <df_core_exec> --suite parity|contract|harness` 可单跑；`--suite combination` 另须 `--expert-exe <df_quant_exec>`。P0024 的路由至专家接口组合复用既有专家执行器；P0026 的 routed 请求在 core 执行器中直接调用生产组合入口。敏感性脚本仅在临时源码副本编译变体，独立运行、不进入 CTest、不修改工作树或冻结数据。契约见 [ROUTER §6](ROUTER.md#6-生产-cpu-scalar)，证据归 P0024。[代码]
+
+生产 routed 分支复用 `df_core_exec` 与公共消费者，不重跑上游 oracle 套件。Debug/Release 及 `cpu-asan-core` 构建 `df_core_exec df_router_consumer` 后，用 `ctest --test-dir <build> -R '^core\.(moe\.(consumer|parity|harness)|compile_flags)$' --output-on-failure --no-tests=error` 运行新增测试；`cpu-asan` 的 quant-only 注册不变。`PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/core/test_moe_scalar.py --exe <build>/tests/core/df_core_exec --suite environment` 单独检查组合入口的 MXCSR 控制/状态模式；驱动仅收集自身新增测试，缺失执行器、异常或 skip 均失败。私有观测与存储保证见 [MOE §5](MOE.md#5-生产-cpu-scalar)，错误链与增量证据归 P0026。[代码]
 
 生产量化套件由上述三种 CPU preset 的 CTest 运行，也可单独调用驱动；各脚本的 `--suite` 见测试清单。临时生产变体敏感性单独运行，不进入每次 CTest，证据见对应 P。以下命令不需要权重或 GPU；源码目录外运行时将脚本与执行器路径换成绝对路径。[代码]
 

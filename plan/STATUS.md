@@ -11,6 +11,7 @@
 | 工作项 | 状态 | 下一步或阻塞 |
 | --- | --- | --- |
 | [P0005 — 部署资质检查与首台验证](p0005-hardware-qualification.md) | draft | 缺目标机与 CUDA 探针构建环境，暂未启动 |
+| [P0026 — 单 token 主干 routed 分支生产 CPU scalar](p0026-routed-branch-scalar.md) | active | 候选实现及增量验证已到位，待人工审议与已提交干净检出补证 |
 
 ## 已验收入口
 
