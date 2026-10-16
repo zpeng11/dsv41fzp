@@ -13,7 +13,7 @@ add_custom_command(
   COMMENT "Generating the verified BF16 SiLU table"
   VERBATIM)
 
-add_library(df_quant STATIC codec.cpp dequant.cpp compute.cpp act_quant.cpp linear.cpp swiglu.cpp
+add_library(df_quant STATIC codec.cpp dequant.cpp compute.cpp fp8_compute.cpp act_quant.cpp linear.cpp swiglu.cpp
             expert.cpp contract.h detail.h "${DF_SILU_TABLE_HEADER}")
 target_include_directories(df_quant PUBLIC "${PROJECT_SOURCE_DIR}/include"
                             PRIVATE "${PROJECT_BINARY_DIR}/generated")

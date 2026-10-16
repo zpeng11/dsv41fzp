@@ -100,6 +100,9 @@ CTest 统一入口注册以下测试，任一失败使 `ctest` 非零退出；Py
 | `core.moe.parity` / `core.moe.harness` | `tests/core/test_moe_scalar.py`：生产普通/私有观测对照 routed 参照，逐步部分和、尾部及协议/故障检出 |
 | `quant.compute` | `tests/quant/test_compute.py`：专家 FP8×packed FP4 单输出计算参照的独立逐阶段期望、输入契约、临时副本敏感性与失败传播 |
 | `quant.fp8_compute` | `tests/quant/test_fp8_compute.py`：FP8×FP8 单输出点积的独立阶段期望、二维 scale 选行及激活量化组合、输入/环境与定向错误检出；契约见 [COMPUTE §8](COMPUTE.md#8-fp8-块缩放单输出点积) |
+| `quant.fp8_dot.consumer` | 公共头独立调用生产 FP8 点积、两种输出、手算结果、只读重叠及成功路径无分配 |
+| `quant.fp8_dot.parity` / `quant.fp8_dot.contract` | `tests/quant/test_fp8_compute_parity.py`：生产普通与私有观测对照 P0027 参照及独立期望，输入/存储拒绝、失败原子性、二维选行及生产量化组合 |
+| `quant.fp8_dot.environment` / `quant.fp8_dot.harness` | 同驱动检查八模式 MXCSR 控制/状态、阶段与正式结果，以及协议、执行器故障、ASan 加毒有效性与失败传播 |
 | `quant.act_quant` | `tests/quant/test_act_quant.py`：BF16 动态激活量化参照的独立逐阶段期望、有限码点穷举、布局与计算组合、临时副本敏感性与失败传播 |
 | `quant.codec.parity` | 生产 codec 在默认、向上舍入、FTZ、DAZ 四种 MXCSR 下逐位对照 `ref/` |
 | `quant.codec.contract` | 每类输入拒绝、失败时输出不变、格式契约版本 |
@@ -154,6 +157,8 @@ ctest --test-dir <repo>/build/cpu-debug -R '^core\.router(\.expert)?$' --output-
 Release 换对应目录。上述参照接口测试复用 `df_quant_exec`，只执行所选专家，不聚合输出；P0024 的生产路由使用独立 `df_core_exec`，不改变原命令语义。[代码]
 
 P0027 FP8 点积新增验收从任意目录执行 `PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/quant/test_fp8_compute.py`。配置 Debug/Release 后用 `ctest --test-dir <repo>/build/cpu-debug -R '^quant\.fp8_compute$' --output-on-failure --no-tests=error`（Release 换对应目录），无需 C++ build；只收集该新增套件，旧测试模块仅提供独立期望构件。仅依赖标准库，不需要权重、GPU 或网络，错误、异常、skip 与缺依赖均非零退出；环境探针要求 ENV-A，调用窗口内仅采集环境，恢复后核对阶段与结果。临时源码变体和测试侧错映射检出不改工作树，分类证据归 P0027；两种 sanitizer scope 不新增本套件。[代码]
+
+P0028 生产 FP8 点积构建 `df_quant_exec df_fp8_dot_consumer` 后，以 `ctest --test-dir <build> -R '^quant\.(fp8_dot\.(consumer|parity|contract|environment|harness)|compile_flags)$' --verbose --output-on-failure --no-tests=error` 运行增量验证。使用 Debug/Release 及既有 `cpu-asan` quant scope；后者沿用 §3 的 ASan/UBSan 环境，不扩大到 core 或 Python 参照套件。驱动可用 `PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/quant/test_fp8_compute_parity.py --exe <build>/tests/quant/df_quant_exec --suite parity|contract|environment|harness` 单跑（`--suite` 取其中一项）；只采集新增测试，不重跑导入模块的旧套件，缺依赖、执行故障与 skip 均失败。公共与私有入口契约只见 [COMPUTE §8.5](COMPUTE.md#85-生产-c-scalar)，定向临时变体与增量证据归 P0028。[代码]
 
 P0025 routed 分支参照仅依赖标准库，不需要 C++ 执行器、权重或网络。从任意目录执行 `PYTHONDONTWRITEBYTECODE=1 python3 <repo>/tests/core/test_moe.py`；配置 Debug/Release 后可用 `ctest --test-dir <repo>/build/cpu-debug -R '^core\.moe$' --output-on-failure --no-tests=error`（Release 换对应目录），无需 build。只采集新增测试，导入旧模块仅复用期望与构造，不重跑旧验收；非 ENV-A、异常、错误或 skip 均失败，不扩大两种 sanitizer scope。数值及环境边界只见 [MOE](MOE.md)。[代码]
 

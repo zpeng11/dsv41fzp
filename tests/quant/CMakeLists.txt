@@ -1,4 +1,4 @@
-# Production quant consumers (P0010, P0011, P0013, P0017, P0019): the executor links df_quant only,
+# Production quant consumers (P0010, P0011, P0013, P0017, P0019, P0028): the executor links df_quant only,
 # never its sources.
 
 add_executable(df_quant_exec quant_exec.cpp)
@@ -31,6 +31,15 @@ add_test(NAME quant.swiglu.consumer COMMAND df_swiglu_consumer)
 add_executable(df_expert_consumer expert_consumer.cpp)
 target_link_libraries(df_expert_consumer PRIVATE df_quant df_cxx_baseline df_sanitize)
 add_test(NAME quant.expert.consumer COMMAND df_expert_consumer)
+
+add_executable(df_fp8_dot_consumer fp8_dot_consumer.cpp)
+target_link_libraries(df_fp8_dot_consumer PRIVATE df_quant df_cxx_baseline df_sanitize)
+add_test(NAME quant.fp8_dot.consumer COMMAND df_fp8_dot_consumer)
+
+foreach(_suite IN ITEMS parity contract environment harness)
+  df_add_python_test(quant.fp8_dot.${_suite} "${CMAKE_CURRENT_SOURCE_DIR}/test_fp8_compute_parity.py"
+    --exe "$<TARGET_FILE:df_quant_exec>" --suite ${_suite})
+endforeach()
 
 foreach(_suite IN ITEMS parity contract harness)
   df_add_python_test(quant.linear.${_suite} "${CMAKE_CURRENT_SOURCE_DIR}/test_linear_parity.py"

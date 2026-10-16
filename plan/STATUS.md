@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-**开发阶段初期：已有 CPU 格式、反量化、专家分组点积与动态激活量化参照及生产 scalar，单 token 线性层、SwiGLU 桥与完整 FP4 专家生产 scalar、主干 MoE 路由 CPU 参照及生产 scalar 与合成专家接口验证、routed 分支 CPU 参照及生产 scalar 与多专家聚合验证、FP8×FP8 块缩放单输出点积 CPU 参照，以及官方 checkpoint 清点、选定行、完整 w1 和固定专家三矩阵验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
+**开发阶段初期：已有 CPU 格式、反量化、专家分组点积与动态激活量化参照及生产 scalar，单 token 线性层、SwiGLU 桥与完整 FP4 专家生产 scalar、主干 MoE 路由 CPU 参照及生产 scalar 与合成专家接口验证、routed 分支 CPU 参照及生产 scalar 与多专家聚合验证、FP8×FP8 块缩放单输出点积 CPU 参照及生产 scalar，以及官方 checkpoint 清点、选定行、完整 w1 和固定专家三矩阵验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
 
 ## 当前工作项
 
@@ -20,6 +20,7 @@
 | `df_quant` codec 与给定 scale 反量化 | [QUANT §6～§7](../docs/QUANT.md#6-生产-c-codecsrcquant) | [P0010](p0010-quant-scalar-baseline.md)、[P0011](p0011-quant-dequant-scalar.md) |
 | `ref/compute.py` | [COMPUTE](../docs/COMPUTE.md) | [P0012](p0012-expert-grouped-dot-oracle.md) |
 | `ref/fp8_compute.py` | [COMPUTE §8](../docs/COMPUTE.md#8-fp8-块缩放单输出点积)；覆盖边界见 [MODEL §4](../docs/MODEL.md#4-精确性链条) | [P0027](p0027-fp8-grouped-dot-oracle.md) |
+| `df_quant` FP8 块缩放单输出点积 | [COMPUTE §8.5](../docs/COMPUTE.md#85-生产-c-scalar)，上一级与覆盖边界见 [MODEL §4](../docs/MODEL.md#4-精确性链条) | [P0028](p0028-fp8-grouped-dot-scalar.md) |
 | `df_quant` 专家分组点积 | [COMPUTE §6](../docs/COMPUTE.md#6-生产-c-scalarsrcquant) | [P0013](p0013-expert-grouped-dot-scalar.md) |
 | `ref/act_quant.py` | [ACTQUANT](../docs/ACTQUANT.md) | [P0014](p0014-act-quant-oracle.md) |
 | `ref/expert.py` | [EXPERT](../docs/EXPERT.md) | [P0020](p0020-expert-oracle.md) |

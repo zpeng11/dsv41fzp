@@ -27,4 +27,15 @@ void expert_grouped_dot(std::span<const std::uint8_t> a_codes, std::span<const s
                         std::span<const std::uint8_t> scale_a, std::span<const std::uint8_t> scale_b,
                         std::span<std::uint16_t> out);
 
+// Single-output FP8 grouped dot under docs/COMPUTE.md §8 (P0028, D0021).
+// Both code views contain K E4M3FN bytes; each E8M0 scale view contains K/32.
+// Outputs, environment and validation order follow the expert entry above, with
+// NaN weight codes also rejected. No packed weights or matrix layout is accepted.
+void fp8_grouped_dot(std::span<const std::uint8_t> a_codes, std::span<const std::uint8_t> w_codes,
+                     std::span<const std::uint8_t> scale_a, std::span<const std::uint8_t> scale_b,
+                     std::span<std::uint32_t> out);
+void fp8_grouped_dot(std::span<const std::uint8_t> a_codes, std::span<const std::uint8_t> w_codes,
+                     std::span<const std::uint8_t> scale_a, std::span<const std::uint8_t> scale_b,
+                     std::span<std::uint16_t> out);
+
 }  // namespace df::quant
