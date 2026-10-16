@@ -56,9 +56,9 @@ Release 将三处 `cpu-debug` 换为 `cpu-release`。从其他目录运行测试
 | `df_use_version_info(<target>)` | 函数 | 使 target 依赖版本刷新步骤并可包含 `df/version_info.h`；该头只应被单个 TU 包含 |
 | `df_sanitize` | INTERFACE | `DF_SANITIZE=ON` 时带 `-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer`（编译与链接），否则为空；挂到 quant/core 生产库、对应执行器与公共消费者 |
 | `df_quant` | STATIC | 生产 quant 库（`src/quant`），公共头根为 `include/`，向消费者只传播 C++20；私有链接 `df_cxx_baseline`、`df_strict_fp`、`df_sanitize` |
-| `df_core` | STATIC | 主干 router scalar（`src/core`），公共头根为 `include/`，向消费者传播 C++20；私有链接 `df_quant` 与上述 baseline/strict/sanitize；quant-only scope 不构建 |
+| `df_core` | STATIC | 主干 router 与 routed 分支 scalar（`src/core`），公共头根为 `include/`，向消费者传播 C++20；私有链接 `df_quant` 与上述 baseline/strict/sanitize；quant-only scope 不构建 |
 
-缓存变量 `DF_TEST_SCOPE` 取 `all`（默认）、`quant` 或 `core`，其他值在 configure 时 FATAL_ERROR。core scope 只注册生产 router 新测试与编译选项检查，不注册旧 oracle、quant 测试或专家组合测试；依赖的 `df_quant` 仍按相同选项构建。[代码]
+缓存变量 `DF_TEST_SCOPE` 取 `all`（默认）、`quant` 或 `core`，其他值在 configure 时 FATAL_ERROR。core scope 注册生产 router、routed 分支测试与编译选项检查，不注册旧 oracle、quant 测试或需独立专家执行器的 router 组合测试；依赖的 `df_quant` 仍按相同选项构建。[代码]
 
 ## 5. 数值前提
 
