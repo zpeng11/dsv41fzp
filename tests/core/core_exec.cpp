@@ -25,7 +25,9 @@
 #include <sanitizer/asan_interface.h>
 #endif
 
+#include "df/core/moe.h"
 #include "df/core/router.h"
+#include "moe_detail.h"
 #include "router_detail.h"
 
 namespace {
@@ -96,6 +98,16 @@ struct Request {
   bool has_vl_present = false;
   std::array<std::size_t, 5> caps{};
   bool has_caps = false;
+  std::array<std::size_t, 7> expert_caps{};
+  bool has_expert_caps = false;
+  std::size_t expert_out_cap = 0;
+  std::size_t accumulator_cap = 0;
+  std::size_t out_cap = 0;
+  std::size_t trace_cap = 0;
+  bool has_expert_out_cap = false;
+  bool has_accumulator_cap = false;
+  bool has_out_cap = false;
+  bool has_trace_cap = false;
   unsigned precision = kCertificationBits;
   bool has_precision = false;
   bool poison = false;
@@ -117,12 +129,17 @@ struct Request {
   std::vector<std::vector<std::uint64_t>> sections;
 };
 
-std::array<std::size_t, 5> parse_caps(std::string_view text) {
+template <std::size_t N>
+std::array<std::size_t, N> parse_counts(std::string_view text, std::string_view name) {
   const auto values = split(text, ',');
-  if (values.size() != 5) die("caps needs five counts");
-  std::array<std::size_t, 5> result{};
+  if (values.size() != N) die(std::string(name) + " needs " + std::to_string(N) + " counts");
+  std::array<std::size_t, N> result{};
   for (std::size_t i = 0; i < result.size(); ++i) result[i] = number(values[i], 10);
   return result;
+}
+
+std::array<std::size_t, 5> parse_caps(std::string_view text) {
+  return parse_counts<5>(text, "caps");
 }
 
 Request parse(std::string_view line) {
@@ -156,6 +173,22 @@ Request parse(std::string_view line) {
     } else if (field.starts_with("caps=")) {
       if (request.has_caps) die("duplicate caps");
       request.caps = parse_caps(field.substr(5)); request.has_caps = true;
+    } else if (field.starts_with("expert_caps=")) {
+      if (request.has_expert_caps) die("duplicate expert_caps");
+      request.expert_caps = parse_counts<7>(field.substr(12), "expert_caps");
+      request.has_expert_caps = true;
+    } else if (field.starts_with("expert_out_cap=")) {
+      if (request.has_expert_out_cap) die("duplicate expert_out_cap");
+      request.expert_out_cap = number(field.substr(15), 10); request.has_expert_out_cap = true;
+    } else if (field.starts_with("accumulator_cap=")) {
+      if (request.has_accumulator_cap) die("duplicate accumulator_cap");
+      request.accumulator_cap = number(field.substr(16), 10); request.has_accumulator_cap = true;
+    } else if (field.starts_with("out_cap=")) {
+      if (request.has_out_cap) die("duplicate out_cap");
+      request.out_cap = number(field.substr(8), 10); request.has_out_cap = true;
+    } else if (field.starts_with("trace_cap=")) {
+      if (request.has_trace_cap) die("duplicate trace_cap");
+      request.trace_cap = number(field.substr(10), 10); request.has_trace_cap = true;
     } else if (field.starts_with("precision=")) {
       if (request.has_precision) die("duplicate precision");
       const auto value = number(field.substr(10), 10);
@@ -507,7 +540,12 @@ std::string run_math(const Request& request) {
   return response;
 }
 
+#include "moe_exec.h"
+
 std::string dispatch(const Request& request) {
+  if (request.op == "moe_contract") return run_moe_contract(request);
+  if (request.op == "moe_accumulate") return run_moe_accumulate(request);
+  if (request.op == "moe") return run_moe(request);
   if (request.op == "route") return run_route(request);
   if (request.op == "counts") return run_counts(request);
   if (request.op == "storage") return run_storage(request);

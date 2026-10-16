@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-**开发阶段初期：已有 CPU 格式、反量化、专家分组点积与动态激活量化参照及生产 scalar，单 token 线性层、SwiGLU 桥与完整 FP4 专家生产 scalar、主干 MoE 路由 CPU 参照及生产 scalar 与合成专家接口验证、routed 分支 CPU 参照与多专家聚合验证，以及官方 checkpoint 清点、选定行、完整 w1 和固定专家三矩阵验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
+**开发阶段初期：已有 CPU 格式、反量化、专家分组点积与动态激活量化参照及生产 scalar，单 token 线性层、SwiGLU 桥与完整 FP4 专家生产 scalar、主干 MoE 路由 CPU 参照及生产 scalar 与合成专家接口验证、routed 分支 CPU 参照及生产 scalar 与多专家聚合验证，以及官方 checkpoint 清点、选定行、完整 w1 和固定专家三矩阵验证入口。** 推理引擎、CUDA 路径、完整 FP32 模型 oracle、目标机验证与引擎性能基线均未开始，不可部署。
 
 ## 当前工作项
 
@@ -25,6 +25,7 @@
 | `ref/router.py` 与合成专家接口 | [ROUTER](../docs/ROUTER.md)；[MODEL §4](../docs/MODEL.md#4-精确性链条) 的主干路由与接口边界 | [P0023](p0023-router-oracle.md) |
 | `df_core` 主干 router 与生产专家接口 | [ROUTER §6](../docs/ROUTER.md#6-生产-cpu-scalar)；[MODEL §4](../docs/MODEL.md#4-精确性链条) 的生产路由边界 | [P0024](p0024-router-scalar.md) |
 | `ref/moe.py` routed 分支与多专家聚合 | [MOE](../docs/MOE.md)；覆盖边界见 [MODEL §4](../docs/MODEL.md#4-精确性链条) | [P0025](p0025-routed-branch-oracle.md) |
+| `df_core` routed 分支生产 scalar | [MOE §5](../docs/MOE.md#5-生产-cpu-scalar)；覆盖边界见 [MODEL §4](../docs/MODEL.md#4-精确性链条) | [P0026](p0026-routed-branch-scalar.md) |
 | `df_quant` 单行动态激活量化 | [ACTQUANT §7](../docs/ACTQUANT.md#7-生产-c-scalarsrcquant) | [P0017](p0017-act-quant-scalar.md) |
 | `tools/ckpt_inventory.py` | [MODEL §2](../docs/MODEL.md#2-结构与格式) 的 [ckpt] 事实 | [P0016](p0016-checkpoint-inventory.md) |
 | `tools/ckpt_expert.py` | [MODEL §4](../docs/MODEL.md#4-精确性链条) 的真实权重选定行验证边界；[BUILD §7](../docs/BUILD.md#7-测试清单) 的操作约束 | [P0018](p0018-checkpoint-expert-consumption.md) |

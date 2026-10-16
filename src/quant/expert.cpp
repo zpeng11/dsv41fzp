@@ -119,12 +119,17 @@ void evaluate(std::span<const std::uint16_t> input, ExpertMatrix w1, ExpertMatri
               ExpertMatrix w3, bool weighted, std::uint32_t route_weight_bits,
               ExpertWorkspace work, std::span<std::uint16_t> out,
               const detail::SwigluTrace* trace) {
-  const detail::ExpertCounts counts =
-      detail::check_expert_counts(input.size(), w1.n, w1.k, w2.n, w2.k, w3.n, w3.k,
-                                  out.size(), trace != nullptr);
-  check_capacity(input, w1, w2, w3, work, out, trace, counts);
+  const detail::ExpertCounts counts = trace == nullptr
+                                           ? detail::validate_expert_parameters(input, w1, w2, w3,
+                                                                                work, out)
+                                           : detail::check_expert_counts(
+                                                 input.size(), w1.n, w1.k, w2.n, w2.k, w3.n,
+                                                 w3.k, out.size(), true);
+  if (trace != nullptr) {
+    check_capacity(input, w1, w2, w3, work, out, trace, counts);
+  }
   check_storage(input, w1, w2, w3, work, out, trace, counts);
-  check_contents(input, w1, w2, w3, weighted, route_weight_bits);
+  detail::validate_expert_contents(input, w1, w2, w3, weighted, route_weight_bits);
 
   const auto input_codes = work.input_codes.first(input.size());
   const auto input_scales = work.input_scales.first(counts.input_groups);
@@ -210,6 +215,21 @@ void check_expert_storage(std::span<const std::span<const std::byte>> reads,
   for (const auto read : reads) {
     require_disjoint(read, read.size(), out_write, out_write.size());
   }
+}
+
+ExpertCounts validate_expert_parameters(std::span<const std::uint16_t> input, ExpertMatrix w1,
+                                        ExpertMatrix w2, ExpertMatrix w3,
+                                        ExpertWorkspace work, std::span<std::uint16_t> out) {
+  const ExpertCounts counts =
+      check_expert_counts(input.size(), w1.n, w1.k, w2.n, w2.k, w3.n, w3.k, out.size(), false);
+  check_capacity(input, w1, w2, w3, work, out, nullptr, counts);
+  return counts;
+}
+
+void validate_expert_contents(std::span<const std::uint16_t> input, ExpertMatrix w1,
+                              ExpertMatrix w2, ExpertMatrix w3, bool weighted,
+                              std::uint32_t route_weight_bits) {
+  check_contents(input, w1, w2, w3, weighted, route_weight_bits);
 }
 
 void trace_expert(std::span<const std::uint16_t> input, ExpertMatrix w1, ExpertMatrix w2,

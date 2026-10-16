@@ -30,5 +30,13 @@ SoftplusBounds softplus_bounds(std::uint32_t bits, unsigned precision);
 void check_router_counts(std::size_t n, std::size_t k);
 void check_router_storage(std::span<const std::span<const std::byte>> reads,
                           std::span<const std::span<std::byte>> writes);
+void validate_router_parameters(
+    std::span<const std::uint16_t> input, GateMatrix gate,
+    std::span<const std::uint32_t> bias, RouterWorkspace work,
+    const std::optional<std::span<const std::uint32_t>>& bias_vl = std::nullopt);
+void validate_router_contents(
+    std::span<const std::uint16_t> input, GateMatrix gate,
+    std::span<const std::uint32_t> bias,
+    const std::optional<std::span<const std::uint32_t>>& bias_vl = std::nullopt);
 
 }  // namespace df::core::detail

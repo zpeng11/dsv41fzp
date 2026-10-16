@@ -1,5 +1,7 @@
+#include "df/core/moe.h"
 #include "df/core/router.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -12,6 +14,11 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <xmmintrin.h>
+
+#if defined(__SANITIZE_ADDRESS__)
+#include <sanitizer/asan_interface.h>
+#endif
 
 namespace {
 
@@ -158,6 +165,8 @@ void failures_are_atomic() {
   require(shared == shared_before, "read/write alias rejection changed storage");
 }
 
+#include "moe_consumer.h"
+
 }  // namespace
 
 void* operator new(std::size_t size) {
@@ -172,15 +181,27 @@ void operator delete[](void* pointer) noexcept { std::free(pointer); }
 void operator delete(void* pointer, std::size_t) noexcept { std::free(pointer); }
 void operator delete[](void* pointer, std::size_t) noexcept { std::free(pointer); }
 
-int main() {
+int main(int argc, char** argv) {
+  const bool moe_only = argc == 2 && std::string_view(argv[1]) == "--moe-only";
+  if (argc > 2 || (argc == 2 && !moe_only)) {
+    std::cerr << "usage: df_router_consumer [--moe-only]\n";
+    return 2;
+  }
   try {
-    zero_gate_and_bias_selection();
-    failures_are_atomic();
-    std::cout << "P0024 public router consumer passed\n";
+    if (moe_only) {
+      run_moe_consumer();
+      std::cout << "P0026 public routed consumer passed\n";
+    } else {
+      zero_gate_and_bias_selection();
+      failures_are_atomic();
+      std::cout << "P0024 public router consumer passed\n";
+    }
     return 0;
   } catch (const std::exception& error) {
     g_forbid_allocations = false;
-    std::cerr << "P0024 public router consumer: " << error.what() << '\n';
+    std::cerr << (moe_only ? "P0026 public routed consumer: " :
+                              "P0024 public router consumer: ")
+              << error.what() << '\n';
     return 1;
   }
 }

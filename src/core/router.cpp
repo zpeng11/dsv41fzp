@@ -190,11 +190,9 @@ RouteResult evaluate(std::span<const std::uint16_t> input, GateMatrix gate,
   if (certification_bits != 0 && !detail::fixed::valid_precision(certification_bits)) {
     throw std::invalid_argument("softplus precision must be 192 doubled through 12288");
   }
-  detail::check_router_counts(gate_snapshot.n, gate_snapshot.k);
-  const std::size_t weight_count = checked_product(gate_snapshot.n, gate_snapshot.k);
-  check_capacity(input, gate_snapshot, bias, work_snapshot, bias_vl_snapshot, weight_count);
+  detail::validate_router_parameters(input, gate_snapshot, bias, work_snapshot, bias_vl_snapshot);
   check_storage(input, gate_snapshot, bias, work_snapshot, bias_vl_snapshot, trace);
-  check_contents(input, gate_snapshot, bias, bias_vl_snapshot);
+  detail::validate_router_contents(input, gate_snapshot, bias, bias_vl_snapshot);
 
   const auto linear = work_snapshot.linear_bits.first(gate_snapshot.n);
   const auto temp = work_snapshot.temp_bits.first(gate_snapshot.n);
@@ -287,6 +285,22 @@ void check_router_storage(std::span<const std::span<const std::byte>> reads,
                                          writes[i].size());
     }
   }
+}
+
+void validate_router_parameters(
+    std::span<const std::uint16_t> input, GateMatrix gate,
+    std::span<const std::uint32_t> bias, RouterWorkspace work,
+    const std::optional<std::span<const std::uint32_t>>& bias_vl) {
+  check_router_counts(gate.n, gate.k);
+  const std::size_t weight_count = checked_product(gate.n, gate.k);
+  check_capacity(input, gate, bias, work, bias_vl, weight_count);
+}
+
+void validate_router_contents(
+    std::span<const std::uint16_t> input, GateMatrix gate,
+    std::span<const std::uint32_t> bias,
+    const std::optional<std::span<const std::uint32_t>>& bias_vl) {
+  check_contents(input, gate, bias, bias_vl);
 }
 
 RouteResult trace_route(std::span<const std::uint16_t> input, GateMatrix gate,
